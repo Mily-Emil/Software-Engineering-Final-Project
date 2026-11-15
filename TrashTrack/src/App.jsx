@@ -2712,19 +2712,32 @@ function StatusPage({
   const userCount = chat.filter(m => m.sender === 'user').length
   const stepIndex = report ? Math.max(0, statuses.indexOf(report.status)) : 0
 
-  const statusHeadline =
-    report?.status === 'Selesai'
-      ? 'Penanganan selesai'
-      : report?.status === 'Diproses'
-      ? 'Sedang ditangani petugas'
-      : 'Menunggu validasi petugas'
+  const isRejected = report?.status === 'Ditolak' || report?.analysis?.is_waste === false
+  const isUnverifiedFallback =
+    Boolean(report?.analysis?.is_unverified_fallback) ||
+    report?.analysis?.ai_model === 'fallback-manual-review'
 
-  const statusSubtext =
-    report?.status === 'Selesai'
-      ? 'Titik sampah ini telah dibersihkan dan diverifikasi selesai oleh petugas kebersihan kampus.'
-      : report?.status === 'Diproses'
-      ? 'Petugas kebersihan Universitas Klabat sedang menindaklanjuti laporan di lokasi ini.'
-      : 'Laporan Anda sudah diterima dan akan ditinjau oleh petugas kebersihan kampus.'
+  const rawConfidence = Number(report?.analysis?.confidence_score ?? 0.9)
+  const confidencePercent = isRejected || isUnverifiedFallback
+    ? 0
+    : Math.round(rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence)
+
+  const statusHeadline = isRejected
+    ? 'Laporan ditolak oleh AI'
+    : report?.status === 'Selesai'
+    ? 'Penanganan selesai'
+    : report?.status === 'Diproses'
+    ? 'Sedang ditangani petugas'
+    : 'Menunggu validasi petugas'
+
+  const statusSubtext = isRejected
+    ? report?.analysis?.detected_notes ||
+      'Foto terdeteksi bukan merupakan titik sampah kampus (tidak memenuhi kriteria laporan). Laporan ini tidak dijadwalkan ke petugas kebersihan.'
+    : report?.status === 'Selesai'
+    ? 'Titik sampah ini telah dibersihkan dan diverifikasi selesai oleh petugas kebersihan kampus.'
+    : report?.status === 'Diproses'
+    ? 'Petugas kebersihan Universitas Klabat sedang menindaklanjuti laporan di lokasi ini.'
+    : 'Laporan Anda sudah diterima dan akan ditinjau oleh petugas kebersihan kampus.'
 
   return (
     <div className="page-stack status-page">
@@ -2827,44 +2840,70 @@ function StatusPage({
             </div>
 
             <div className="figma-tags-row">
-              <span className={`figma-tag tag-${report.analysis?.category || 'organik'}`}>
-                {(report.analysis?.category || 'organik').replace(/^./, c => c.toUpperCase())}
-              </span>
-              <span className={`figma-tag tag-sev-${report.analysis?.severity || 'sedang'}`}>
-                {(report.analysis?.severity || 'sedang').replace(/^./, c => c.toUpperCase())}
-              </span>
-              <span className="figma-tag tag-confidence">
-                {Math.round((report.analysis?.confidence_score || 0.9) * 100)}% yakin
-              </span>
+              {isRejected ? (
+                <>
+                  <span className="figma-tag tag-rejected" style={{ background: '#fef2f2', color: '#dc2626', borderColor: '#fecaca' }}>
+                    Bukan Sampah (Ditolak)
+                  </span>
+                  <span className="figma-tag tag-sev-rendah" style={{ background: '#f1f5f9', color: '#475569', borderColor: '#cbd5e1' }}>
+                    Non-Sampah Kampus
+                  </span>
+                  <span className="figma-tag tag-confidence" style={{ background: '#fef2f2', color: '#dc2626', borderColor: '#fecaca' }}>
+                    0% yakin
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className={`figma-tag tag-${report.analysis?.category || 'organik'}`}>
+                    {(report.analysis?.category || 'organik').replace(/^./, c => c.toUpperCase())}
+                  </span>
+                  <span className={`figma-tag tag-sev-${report.analysis?.severity || 'sedang'}`}>
+                    {(report.analysis?.severity || 'sedang').replace(/^./, c => c.toUpperCase())}
+                  </span>
+                  <span className="figma-tag tag-confidence">
+                    {confidencePercent}% yakin
+                  </span>
+                </>
+              )}
             </div>
 
             <div className="figma-stepper-block">
               <span className="figma-stepper-label">STATUS PENANGANAN</span>
-              <div className="figma-horizontal-stepper">
-                {statuses.map((s, i) => {
-                  const isCurrent = stepIndex === i
-                  const isDone = stepIndex > i
-                  const stateClass = isCurrent ? 'current' : isDone ? 'done' : 'upcoming'
-                  return (
-                    <div className={`figma-step ${stateClass}`} key={s}>
-                      <div className="figma-step-track">
-                        <span className="figma-step-circle">
-                          {isDone ? <Check size={12} /> : isCurrent ? <i className="figma-step-dot" /> : i + 1}
-                        </span>
-                        {i < statuses.length - 1 && (
-                          <div className={`figma-step-line ${isDone ? 'line-done' : ''}`} />
-                        )}
+              {isRejected ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', color: '#b91c1c', fontSize: '13px', fontWeight: 600 }}>
+                  <XCircle size={16} color="#dc2626" />
+                  <span>Ditolak — Foto tidak memenuhi kriteria sampah kampus</span>
+                </div>
+              ) : (
+                <div className="figma-horizontal-stepper">
+                  {statuses.map((s, i) => {
+                    const isCurrent = stepIndex === i
+                    const isDone = stepIndex > i
+                    const stateClass = isCurrent ? 'current' : isDone ? 'done' : 'upcoming'
+                    return (
+                      <div className={`figma-step ${stateClass}`} key={s}>
+                        <div className="figma-step-track">
+                          <span className="figma-step-circle">
+                            {isDone ? <Check size={12} /> : isCurrent ? <i className="figma-step-dot" /> : i + 1}
+                          </span>
+                          {i < statuses.length - 1 && (
+                            <div className={`figma-step-line ${isDone ? 'line-done' : ''}`} />
+                          )}
+                        </div>
+                        <strong className="figma-step-title">{s}</strong>
                       </div>
-                      <strong className="figma-step-title">{s}</strong>
-                    </div>
-                  )
-                })}
-              </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
 
-            <div className="figma-status-callout">
-              <strong>{statusHeadline}</strong>
-              <p>{report.description ? `${report.description} — ${statusSubtext}` : statusSubtext}</p>
+            <div
+              className={`figma-status-callout ${isRejected ? 'rejected-callout' : ''}`}
+              style={isRejected ? { background: '#fef2f2', borderColor: '#fecaca' } : {}}
+            >
+              <strong style={isRejected ? { color: '#b91c1c' } : {}}>{statusHeadline}</strong>
+              <p style={isRejected ? { color: '#7f1d1d' } : {}}>{statusSubtext}</p>
             </div>
           </section>
 
