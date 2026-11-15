@@ -3,6 +3,9 @@
 // serta AdvancedMarker untuk titik laporan sampah dan pemilih lokasi.
 import React, { useEffect, useState } from 'react'
 import { APIProvider, AdvancedMarker, Map, useMap, useMapsLibrary } from '@vis.gl/react-google-maps'
+import { MapContainer, TileLayer, Polygon as LeafletPolygon, Marker as LeafletMarker, useMapEvents } from 'react-leaflet'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
 import { MAP_VIEW_BOUNDS, UNKLAB_CENTER, UNKLAB_POLYGON } from '../lib/ai'
 
 export const GOOGLE_MAPS_API_KEY = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '').trim()
@@ -15,7 +18,138 @@ export function statusPinClass(status) {
   return 'done'
 }
 
-// Komponen Poligon Batas Kampus Universitas Klabat (7 titik perimeter kampus)
+function createLeafletPinIcon(status, isPicked = false) {
+  const pinClass = isPicked ? 'pin-picked' : `pin-${statusPinClass(status)}`
+  return L.divIcon({
+    className: 'custom-leaflet-marker-div',
+    html: `<div class="pin ${pinClass}"><span /></div>`,
+    iconSize: [27, 34],
+    iconAnchor: [13, 34]
+  })
+}
+
+// Interaksi klik peta untuk memilih lokasi (Location Picker) pada mode Leaflet
+function LeafletMapPickerEvents({ onPick }) {
+  useMapEvents({
+    click(e) {
+      if (onPick && e?.latlng) {
+        onPick({ latitude: e.latlng.lat, longitude: e.latlng.lng })
+      }
+    }
+  })
+  return null
+}
+
+// Peta Interaktif Mandiri (Leaflet/OpenStreetMap + Esri Satellite)
+// Aktif otomatis ketika Google Maps API belum di-enable atau mengalami pembatasan di Google Cloud Console
+export function InteractiveLeafletMap({
+  className = '',
+  reports = [],
+  onMarkerClick,
+  interactive = true,
+  onPick,
+  pickPosition,
+  fillOpacity = 0.06,
+  showControls = true
+}) {
+  const [layerType, setLayerType] = useState('m') // 'm' = Roadmap, 'y' = Satellite
+  const tileUrl =
+    layerType === 'y'
+      ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+      : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+  const tileAttr =
+    layerType === 'y'
+      ? '&copy; Esri World Imagery'
+      : '&copy; OpenStreetMap contributors'
+
+  const centerLat = pickPosition?.latitude ? Number(pickPosition.latitude) : UNKLAB_CENTER[0]
+  const centerLng = pickPosition?.longitude ? Number(pickPosition.longitude) : UNKLAB_CENTER[1]
+
+  return (
+    <div className={`gmap-wrap ${className}`}>
+      {showControls && (
+        <div className="gmap-type-toggle" role="group" aria-label="Tipe tampilan peta">
+          <button
+            type="button"
+            className={layerType === 'm' ? 'active' : ''}
+            onClick={e => {
+              e.stopPropagation()
+              setLayerType('m')
+            }}
+          >
+            Peta
+          </button>
+          <button
+            type="button"
+            className={layerType === 'y' ? 'active' : ''}
+            onClick={e => {
+              e.stopPropagation()
+              setLayerType('y')
+            }}
+          >
+            Satelit
+          </button>
+        </div>
+      )}
+
+      <MapContainer
+        center={[centerLat, centerLng]}
+        zoom={16}
+        minZoom={14}
+        maxZoom={19}
+        scrollWheelZoom={interactive}
+        dragging={interactive}
+        zoomControl={interactive}
+        attributionControl={false}
+        className="gmap-leaflet-inner"
+        style={{ width: '100%', height: '100%' }}
+      >
+        <TileLayer url={tileUrl} attribution={tileAttr} maxZoom={19} />
+
+        <LeafletPolygon
+          positions={UNKLAB_POLYGON.map(p => [p.lat, p.lng])}
+          pathOptions={{
+            color: layerType === 'y' ? '#4ade80' : '#1b6943',
+            fillColor: layerType === 'y' ? '#4ade80' : '#1b6943',
+            fillOpacity: fillOpacity,
+            weight: 2.5
+          }}
+        />
+
+        {reports
+          .filter(r => r && Number.isFinite(Number(r.latitude)) && Number.isFinite(Number(r.longitude)))
+          .map(r => (
+            <LeafletMarker
+              key={r.id || r.report_code}
+              position={[Number(r.latitude), Number(r.longitude)]}
+              icon={createLeafletPinIcon(r.status)}
+              eventHandlers={{
+                click: () => onMarkerClick && onMarkerClick(r)
+              }}
+            />
+          ))}
+
+        {pickPosition &&
+          Number.isFinite(Number(pickPosition.latitude)) &&
+          Number.isFinite(Number(pickPosition.longitude)) && (
+            <LeafletMarker
+              position={[Number(pickPosition.latitude), Number(pickPosition.longitude)]}
+              icon={createLeafletPinIcon(null, true)}
+            />
+          )}
+
+        {interactive && onPick && <LeafletMapPickerEvents onPick={onPick} />}
+      </MapContainer>
+
+      <span className="gmap-badge" title="Peta Interaktif Kampus Unklab (Aktif)">
+        <span className="gmap-dot" style={{ background: '#10b981' }} />
+        {layerType === 'y' ? 'Satelit Unklab' : 'Peta Unklab'}
+      </span>
+    </div>
+  )
+}
+
+// Komponen Poligon Batas Kampus Universitas Klabat (7 titik perimeter kampus) untuk Google Maps
 function CampusBoundaryPolygon({ isHybrid, fillOpacity = 0.06 }) {
   const map = useMap()
   const mapsLib = useMapsLibrary('maps')
@@ -47,8 +181,6 @@ function CampusBoundaryPolygon({ isHybrid, fillOpacity = 0.06 }) {
   return null
 }
 
-// Komponen Marker yang diisolasi agar jika Google Maps gagal otorisasi (Oops! Something went wrong),
-// error marker tidak menjatuhkan seluruh aplikasi React.
 function CampusMarkers({ reports = [], onMarkerClick, pickPosition }) {
   const map = useMap()
   if (!map) return null
@@ -84,7 +216,7 @@ function CampusMarkers({ reports = [], onMarkerClick, pickPosition }) {
   )
 }
 
-// MapErrorBoundary: Mengisolasi kegagalan Google Maps JavaScript API agar seluruh halaman tetap hidup
+// MapErrorBoundary: Mengalihkan ke Peta Interaktif Leaflet jika Google Maps gagal otorisasi
 class MapErrorBoundary extends React.Component {
   constructor(props) {
     super(props)
@@ -96,55 +228,12 @@ class MapErrorBoundary extends React.Component {
   }
 
   componentDidCatch(err) {
-    console.warn('Google Maps internal render error caught safely by MapErrorBoundary:', err)
+    console.warn('Google Maps error caught, fallback to InteractiveLeafletMap:', err)
   }
 
   render() {
     if (this.state.hasError) {
-      const reports = this.props.reports || []
-      const waiting = reports.filter(r => r.status === 'Menunggu').length
-      const rejected = reports.filter(r => r.status === 'Ditolak').length
-      const processing = reports.filter(r => r.status === 'Diproses').length
-      const done = reports.filter(r => r.status === 'Selesai').length
-
-      return (
-        <div
-          className={`gmap-wrap ${this.props.className || ''}`}
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: '#f8fafc',
-            border: '1px solid #e2e8f0',
-            borderRadius: '12px',
-            padding: '24px 18px',
-            textAlign: 'center',
-            minHeight: '220px'
-          }}
-        >
-          <div style={{ color: '#1b6943', fontWeight: 700, fontSize: '15px', marginBottom: '6px' }}>
-            Peta Sebaran Titik Sampah Universitas Klabat
-          </div>
-          <p style={{ color: '#64748b', fontSize: '12px', maxWidth: '440px', margin: '0 0 14px', lineHeight: 1.5 }}>
-            Sedang menghubungkan ke Google Maps Platform. Seluruh data laporan ({reports.length} titik) tetap aman tersimpan di server dan terpantau pada dashboard.
-          </p>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center', fontSize: '11px' }}>
-            <span style={{ background: '#fef3c7', color: '#92400e', padding: '4px 10px', borderRadius: '20px', fontWeight: 600 }}>
-              ● Menunggu: {waiting}
-            </span>
-            <span style={{ background: '#fee2e2', color: '#b91c1c', padding: '4px 10px', borderRadius: '20px', fontWeight: 600 }}>
-              ● Ditolak: {rejected}
-            </span>
-            <span style={{ background: '#e0e7ff', color: '#4338ca', padding: '4px 10px', borderRadius: '20px', fontWeight: 600 }}>
-              ● Diproses: {processing}
-            </span>
-            <span style={{ background: '#dcfce7', color: '#15803d', padding: '4px 10px', borderRadius: '20px', fontWeight: 600 }}>
-              ● Selesai: {done}
-            </span>
-          </div>
-        </div>
-      )
+      return <InteractiveLeafletMap {...this.props} />
     }
     return this.props.children
   }
@@ -167,7 +256,6 @@ function CampusGoogleMapInner({
   fillOpacity = 0.06,
   showControls = true
 }) {
-  // 'm' = Google Maps Standard Roadmap | 'y' = Google Maps Hybrid (Satelit + Label Gedung)
   const [layerType, setLayerType] = useState('m')
   const mapTypeId = layerType === 'y' ? 'hybrid' : 'roadmap'
 
@@ -252,8 +340,9 @@ function CampusGoogleMapInner({
 }
 
 export default function CampusGoogleMap(props) {
+  // Jika Google Maps API Key belum diaktifkan atau gagal auth, langsung gunakan InteractiveLeafletMap
   return (
-    <MapErrorBoundary className={props.className} reports={props.reports}>
+    <MapErrorBoundary {...props}>
       <CampusGoogleMapInner {...props} />
     </MapErrorBoundary>
   )
