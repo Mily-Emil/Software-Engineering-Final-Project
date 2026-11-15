@@ -475,10 +475,31 @@ export async function generateChatbotAnswer({ message, report, history = [], sup
   const code = report?.report_code || 'Anda'
   const status = report?.status || 'Menunggu'
 
+  const isRejected = status === 'Ditolak' || report?.analysis?.is_waste === false
+  const rejectNotes = report?.analysis?.detected_notes || 'Foto bukan merupakan titik sampah fisik di lingkungan kampus.'
+
   // Hitung jumlah pesan pengguna dalam riwayat
   const userMsgCount = history.filter(m => m.sender === 'user').length
   if (userMsgCount >= 10) {
     return `Batas maksimal 10 pertanyaan untuk laporan ${code} telah tercapai. Jika Anda membutuhkan bantuan lebih lanjut, silakan hubungi langsung petugas kebersihan kampus Universitas Klabat atau buat laporan baru.`
+  }
+
+  // Jika laporan berstatus Ditolak (bukan sampah), jawab dengan SINGKAT & PADAT (maksimal 2 kalimat)
+  if (isRejected) {
+    const rejectPrompt = `Anda adalah Chatbot Asisten Kebersihan Kampus Universitas Klabat (Unklab).
+STATUS LAPORAN INI: DITOLAK (Bukan Sampah Kampus). Alasan AI: ${rejectNotes}.
+INSTRUKSI SANGAT PENTING:
+- Jawab pertanyaan pelapor dengan SINGKAT dan PADAT (maksimal 2 kalimat saja, jangan bertele-tele).
+- Karena laporan ini berstatus Ditolak (bukan sampah), tegaskan secara singkat bahwa TIDAK ADA penanganan, pemilahan, komposting, atau daur ulang untuk foto ini.
+- Berikan saran singkat agar pelapor mengunggah foto baru jika menemukan titik sampah fisik nyata di lingkungan kampus Unklab.
+Pertanyaan Pelapor: "${cleanMsg}"`
+
+    const serverGeminiReply = await callServerGemini([{ role: 'user', parts: [{ text: rejectPrompt }] }], 0.2).catch(() => null)
+    if (serverGeminiReply && serverGeminiReply.trim()) {
+      return serverGeminiReply.trim()
+    }
+
+    return `Laporan ${code} berstatus Ditolak karena foto terdeteksi bukan sampah kampus (${rejectNotes}). Tidak ada tindakan pemilahan atau daur ulang untuk laporan ini. Silakan unggah foto baru jika Anda menemukan titik sampah fisik di lingkungan Universitas Klabat.`
   }
 
   // 1. Coba Gemini API via Server Lokal

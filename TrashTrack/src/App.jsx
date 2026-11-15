@@ -2944,12 +2944,25 @@ function StatusPage({
             </div>
 
             <div className="chat-suggestions">
-              <button type="button" onClick={() => setNewMessage('Apakah sampah ini bisa dijadikan kompos atau didaur ulang?')}>
-                Apakah bisa didaur ulang / kompos?
-              </button>
-              <button type="button" onClick={() => setNewMessage('Bagaimana cara memilah sampah ini di kampus?')}>
-                Cara pemilahan
-              </button>
+              {isRejected ? (
+                <>
+                  <button type="button" onClick={() => setNewMessage('Mengapa laporan foto ini ditolak oleh sistem?')}>
+                    Mengapa ditolak?
+                  </button>
+                  <button type="button" onClick={() => setNewMessage('Bagaimana cara mengirim laporan sampah yang benar?')}>
+                    Cara lapor yang benar
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" onClick={() => setNewMessage('Apakah sampah ini bisa dijadikan kompos atau didaur ulang?')}>
+                    Apakah bisa didaur ulang / kompos?
+                  </button>
+                  <button type="button" onClick={() => setNewMessage('Bagaimana cara memilah sampah ini di kampus?')}>
+                    Cara pemilahan
+                  </button>
+                </>
+              )}
             </div>
 
             <div className="figma-chat-footer">
@@ -2958,7 +2971,13 @@ function StatusPage({
                   value={newMessage}
                   onChange={e => setNewMessage(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), sendChat())}
-                  placeholder={userCount >= 10 ? 'Batas 10 pesan untuk laporan ini tercapai.' : 'Tanyakan cara memilah sampah (maks. 300 karakter)...'}
+                  placeholder={
+                    userCount >= 10
+                      ? 'Batas 10 pesan untuk laporan ini tercapai.'
+                      : isRejected
+                      ? 'Tanyakan seputar penolakan laporan ini (maks. 300 karakter)...'
+                      : 'Tanyakan cara memilah sampah (maks. 300 karakter)...'
+                  }
                   maxLength={300}
                   disabled={userCount >= 10 || isChatLoading}
                 />
