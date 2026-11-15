@@ -1,7 +1,7 @@
 // Komponen Peta Resmi Google Maps JavaScript API (@vis.gl/react-google-maps)
 // Menampilkan peta Kampus Universitas Klabat (Unklab) dengan poligon batas kampus (UNKLAB_POLYGON)
 // serta AdvancedMarker untuk titik laporan sampah dan pemilih lokasi.
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { APIProvider, AdvancedMarker, Map, useMap, useMapsLibrary } from '@vis.gl/react-google-maps'
 import { MAP_VIEW_BOUNDS, UNKLAB_CENTER, UNKLAB_POLYGON } from '../lib/ai'
 
@@ -22,23 +22,132 @@ function CampusBoundaryPolygon({ isHybrid, fillOpacity = 0.06 }) {
 
   useEffect(() => {
     if (!map || !mapsLib) return
-    const strokeColor = isHybrid ? '#4ade80' : '#1b6943'
-    const polygon = new mapsLib.Polygon({
-      paths: UNKLAB_POLYGON,
-      strokeColor,
-      strokeOpacity: 0.92,
-      strokeWeight: 2.5,
-      fillColor: strokeColor,
-      fillOpacity,
-      clickable: false,
-      map
-    })
-    return () => {
-      polygon.setMap(null)
+    try {
+      const strokeColor = isHybrid ? '#4ade80' : '#1b6943'
+      const polygon = new mapsLib.Polygon({
+        paths: UNKLAB_POLYGON,
+        strokeColor,
+        strokeOpacity: 0.92,
+        strokeWeight: 2.5,
+        fillColor: strokeColor,
+        fillOpacity,
+        clickable: false,
+        map
+      })
+      return () => {
+        try {
+          polygon.setMap(null)
+        } catch {}
+      }
+    } catch (e) {
+      console.warn('CampusBoundaryPolygon failed to initialize:', e)
     }
   }, [map, mapsLib, isHybrid, fillOpacity])
 
   return null
+}
+
+// Komponen Marker yang diisolasi agar jika Google Maps gagal otorisasi (Oops! Something went wrong),
+// error marker tidak menjatuhkan seluruh aplikasi React.
+function CampusMarkers({ reports = [], onMarkerClick, pickPosition }) {
+  const map = useMap()
+  if (!map) return null
+
+  return (
+    <>
+      {reports
+        .filter(r => r && Number.isFinite(Number(r.latitude)) && Number.isFinite(Number(r.longitude)))
+        .map(r => (
+          <AdvancedMarker
+            key={r.id || r.report_code}
+            position={{ lat: Number(r.latitude), lng: Number(r.longitude) }}
+            onClick={() => onMarkerClick && onMarkerClick(r)}
+            title={`${r.report_code} (${r.status})`}
+          >
+            <div className={`pin pin-${statusPinClass(r.status)}`}>
+              <span />
+            </div>
+          </AdvancedMarker>
+        ))}
+
+      {pickPosition && Number.isFinite(Number(pickPosition.latitude)) && Number.isFinite(Number(pickPosition.longitude)) && (
+        <AdvancedMarker
+          position={{ lat: Number(pickPosition.latitude), lng: Number(pickPosition.longitude) }}
+          title="Titik lokasi laporan"
+        >
+          <div className="pin pin-picked">
+            <span />
+          </div>
+        </AdvancedMarker>
+      )}
+    </>
+  )
+}
+
+// MapErrorBoundary: Mengisolasi kegagalan Google Maps JavaScript API agar seluruh halaman tetap hidup
+class MapErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false }
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  componentDidCatch(err) {
+    console.warn('Google Maps internal render error caught safely by MapErrorBoundary:', err)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      const reports = this.props.reports || []
+      const waiting = reports.filter(r => r.status === 'Menunggu').length
+      const rejected = reports.filter(r => r.status === 'Ditolak').length
+      const processing = reports.filter(r => r.status === 'Diproses').length
+      const done = reports.filter(r => r.status === 'Selesai').length
+
+      return (
+        <div
+          className={`gmap-wrap ${this.props.className || ''}`}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: '#f8fafc',
+            border: '1px solid #e2e8f0',
+            borderRadius: '12px',
+            padding: '24px 18px',
+            textAlign: 'center',
+            minHeight: '220px'
+          }}
+        >
+          <div style={{ color: '#1b6943', fontWeight: 700, fontSize: '15px', marginBottom: '6px' }}>
+            Peta Sebaran Titik Sampah Universitas Klabat
+          </div>
+          <p style={{ color: '#64748b', fontSize: '12px', maxWidth: '440px', margin: '0 0 14px', lineHeight: 1.5 }}>
+            Sedang menghubungkan ke Google Maps Platform. Seluruh data laporan ({reports.length} titik) tetap aman tersimpan di server dan terpantau pada dashboard.
+          </p>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center', fontSize: '11px' }}>
+            <span style={{ background: '#fef3c7', color: '#92400e', padding: '4px 10px', borderRadius: '20px', fontWeight: 600 }}>
+              ● Menunggu: {waiting}
+            </span>
+            <span style={{ background: '#fee2e2', color: '#b91c1c', padding: '4px 10px', borderRadius: '20px', fontWeight: 600 }}>
+              ● Ditolak: {rejected}
+            </span>
+            <span style={{ background: '#e0e7ff', color: '#4338ca', padding: '4px 10px', borderRadius: '20px', fontWeight: 600 }}>
+              ● Diproses: {processing}
+            </span>
+            <span style={{ background: '#dcfce7', color: '#15803d', padding: '4px 10px', borderRadius: '20px', fontWeight: 600 }}>
+              ● Selesai: {done}
+            </span>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }
 
 export function GoogleMapsProvider({ children }) {
@@ -48,7 +157,7 @@ export function GoogleMapsProvider({ children }) {
   return <APIProvider apiKey={GOOGLE_MAPS_API_KEY}>{children}</APIProvider>
 }
 
-export default function CampusGoogleMap({
+function CampusGoogleMapInner({
   className = '',
   reports = [],
   onMarkerClick,
@@ -125,32 +234,7 @@ export default function CampusGoogleMap({
         style={{ width: '100%', height: '100%' }}
       >
         <CampusBoundaryPolygon isHybrid={layerType === 'y'} fillOpacity={fillOpacity} />
-
-        {reports
-          .filter(r => r && Number.isFinite(Number(r.latitude)) && Number.isFinite(Number(r.longitude)))
-          .map(r => (
-            <AdvancedMarker
-              key={r.id || r.report_code}
-              position={{ lat: Number(r.latitude), lng: Number(r.longitude) }}
-              onClick={() => onMarkerClick && onMarkerClick(r)}
-              title={`${r.report_code} (${r.status})`}
-            >
-              <div className={`pin pin-${statusPinClass(r.status)}`}>
-                <span />
-              </div>
-            </AdvancedMarker>
-          ))}
-
-        {pickPosition && Number.isFinite(Number(pickPosition.latitude)) && Number.isFinite(Number(pickPosition.longitude)) && (
-          <AdvancedMarker
-            position={{ lat: Number(pickPosition.latitude), lng: Number(pickPosition.longitude) }}
-            title="Titik lokasi laporan"
-          >
-            <div className="pin pin-picked">
-              <span />
-            </div>
-          </AdvancedMarker>
-        )}
+        <CampusMarkers reports={reports} onMarkerClick={onMarkerClick} pickPosition={pickPosition} />
       </Map>
 
       <a
@@ -164,5 +248,13 @@ export default function CampusGoogleMap({
         Google Maps API
       </a>
     </div>
+  )
+}
+
+export default function CampusGoogleMap(props) {
+  return (
+    <MapErrorBoundary className={props.className} reports={props.reports}>
+      <CampusGoogleMapInner {...props} />
+    </MapErrorBoundary>
   )
 }
