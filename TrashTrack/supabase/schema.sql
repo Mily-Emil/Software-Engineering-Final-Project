@@ -473,7 +473,15 @@ language sql stable security definer set search_path = '' as $$
         'corrected_severity', a.corrected_severity,
         'admin_notes', a.admin_notes,
         'corrected_at', a.corrected_at
-      )
+      ),
+      'chat_messages', coalesce((
+        select jsonb_agg(
+          jsonb_build_object('id', c.id, 'sender', c.sender, 'message', c.message, 'created_at', c.created_at)
+          order by c.created_at asc
+        )
+        from public.chat_messages c
+        where c.report_id = r.id
+      ), '[]'::jsonb)
     ) order by r.created_at desc
   ), '[]'::jsonb)
   from public.reports r

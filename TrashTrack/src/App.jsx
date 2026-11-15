@@ -112,9 +112,9 @@ function mergeReportLists(remoteList = [], localList = []) {
       ...item,
       photo_url: item.photo_url || existing?.photo_url || null,
       chat_messages:
-        Array.isArray(item.chat_messages) && item.chat_messages.length > 0
+        Array.isArray(item.chat_messages) && item.chat_messages.length >= (existing?.chat_messages?.length || 0)
           ? item.chat_messages
-          : existing?.chat_messages || []
+          : existing?.chat_messages || item.chat_messages || []
     })
   }
   return Array.from(byCode.values()).sort(
@@ -739,6 +739,45 @@ function App() {
     }
   }
 
+  // Sinkronisasi riwayat chat laporan dari Supabase agar Admin & Pelapor di perangkat berbeda melihat riwayat chat yang sama
+  const syncReportChatFromCloud = async targetReport => {
+    const code = targetReport?.report_code?.trim()?.toUpperCase()
+    if (!code) return null
+
+    const fallbackHistory =
+      targetReport?.chat_messages?.length > 0
+        ? targetReport.chat_messages
+        : [{ sender: 'ai', message: buildInitialAdvice(targetReport?.analysis, targetReport) }]
+
+    setChat(fallbackHistory)
+
+    if (!supabase) return targetReport
+    try {
+      const { data, error } = await supabase.rpc('get_report_by_code', { p_code: code })
+      if (data && !error) {
+        const cloudHistory =
+          Array.isArray(data.chat_messages) && data.chat_messages.length > 0
+            ? data.chat_messages
+            : fallbackHistory
+        const mergedReport = {
+          ...targetReport,
+          ...data,
+          photo_url: data.photo_url || targetReport?.photo_url || null,
+          analysis: data.analysis || targetReport?.analysis,
+          chat_messages: cloudHistory.length >= fallbackHistory.length ? cloudHistory : fallbackHistory
+        }
+        setChat(mergedReport.chat_messages)
+        setSelected(prev => (prev?.report_code === code ? mergedReport : prev))
+        setReportLookup(prev => (prev?.report_code === code ? mergedReport : prev))
+        setReports(prev => prev.map(r => (r.report_code === code ? mergedReport : r)))
+        return mergedReport
+      }
+    } catch {
+      // Gunakan riwayat lokal jika offline
+    }
+    return targetReport
+  }
+
   // Cek Status Laporan dengan Kode Unik (FR-03, Skenario 11 & 12)
   const lookup = async e => {
     e.preventDefault()
@@ -752,11 +791,7 @@ function App() {
     if (foundLocal) {
       setReportLookup(foundLocal)
       setSelected(foundLocal)
-      const initialHistory =
-        foundLocal.chat_messages?.length > 0
-          ? foundLocal.chat_messages
-          : [{ sender: 'ai', message: buildInitialAdvice(foundLocal.analysis, foundLocal) }]
-      setChat(initialHistory)
+      await syncReportChatFromCloud(foundLocal)
       return
     }
 
@@ -773,6 +808,7 @@ function App() {
         setReportLookup(r)
         setSelected(r)
         setChat(r.chat_messages)
+        setReports(prev => mergeReportLists([r], prev))
         return
       }
     }
@@ -825,8 +861,17 @@ function App() {
       setChat(updatedHistory)
       if (activeReport) {
         const updatedReport = { ...activeReport, chat_messages: updatedHistory }
-        if (reportLookup?.id === activeReport.id) setReportLookup(updatedReport)
-        setReports(prev => prev.map(r => (r.id === activeReport.id ? updatedReport : r)))
+        setReportLookup(prev =>
+          prev?.id === activeReport.id || prev?.report_code === activeReport.report_code ? updatedReport : prev
+        )
+        setSelected(prev =>
+          prev?.id === activeReport.id || prev?.report_code === activeReport.report_code ? updatedReport : prev
+        )
+        setReports(prev =>
+          prev.map(r =>
+            r.id === activeReport.id || r.report_code === activeReport.report_code ? updatedReport : r
+          )
+        )
       }
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'Gagal mengirim pesan chat.')
@@ -1367,6 +1412,7 @@ function App() {
               setQuery={setQuery}
               onDetail={() => {
                 setDetailTab('Detail laporan')
+                if (selected) syncReportChatFromCloud(selected)
                 setModal('detail')
               }}
               onDelete={deleteReport}
@@ -1427,16 +1473,13 @@ function App() {
                 setSelected(r)
                 setReportCode(r.report_code)
                 setReportLookup(r)
+                syncReportChatFromCloud(r)
               }}
               onGoToChatbot={r => {
                 setReportCode(r.report_code)
                 setReportLookup(r)
                 setSelected(r)
-                const initialHistory =
-                  r.chat_messages?.length > 0
-                    ? r.chat_messages
-                    : [{ sender: 'ai', message: buildInitialAdvice(r.analysis, r) }]
-                setChat(initialHistory)
+                syncReportChatFromCloud(r)
                 setPage('status')
               }}
               dateLabel={dateLabel}
@@ -1455,11 +1498,7 @@ function App() {
                 setReportCode(r.report_code)
                 setReportLookup(r)
                 setSelected(r)
-                const initialHistory =
-                  r.chat_messages?.length > 0
-                    ? r.chat_messages
-                    : [{ sender: 'ai', message: buildInitialAdvice(r.analysis, r) }]
-                setChat(initialHistory)
+                syncReportChatFromCloud(r)
               }}
               chat={chat}
               newMessage={newMessage}
@@ -1754,10 +1793,74 @@ function App() {
               >
                 Validasi & Koreksi AI
               </button>
+              <button
+                className={detailTab === 'Riwayat Chat' ? 'active' : ''}
+                onClick={() => {
+                  setDetailTab('Riwayat Chat')
+                  syncReportChatFromCloud(selected)
+                }}
+              >
+                Riwayat Chat AI ({(selected.chat_messages || []).length || 1})
+              </button>
             </div>
           )}
 
-          {detailTab === 'Detail laporan' || !isAdmin ? (
+          {detailTab === 'Riwayat Chat' && isAdmin ? (
+            <div className="validation-content">
+              <div
+                style={{
+                  maxHeight: '340px',
+                  overflowY: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px',
+                  padding: '12px',
+                  background: '#f8fafc',
+                  borderRadius: '12px',
+                  border: '1px solid #e2e8f0',
+                  marginBottom: '14px'
+                }}
+              >
+                {(selected.chat_messages?.length
+                  ? selected.chat_messages
+                  : [{ sender: 'ai', message: buildInitialAdvice(selected.analysis, selected) }]
+                ).map((m, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      alignSelf: m.sender === 'user' ? 'flex-end' : 'flex-start',
+                      maxWidth: '85%',
+                      padding: '10px 14px',
+                      borderRadius: '12px',
+                      background: m.sender === 'user' ? '#1b6943' : '#ffffff',
+                      color: m.sender === 'user' ? '#ffffff' : '#1e293b',
+                      border: m.sender === 'user' ? 'none' : '1px solid #e2e8f0',
+                      fontSize: '13px',
+                      lineHeight: 1.5
+                    }}
+                  >
+                    <strong style={{ display: 'block', fontSize: '11px', opacity: 0.78, marginBottom: '4px' }}>
+                      {m.sender === 'user' ? '👤 Pelapor / Pengguna' : '🤖 Chatbot Solusi AI'}
+                    </strong>
+                    <FormattedChatMessage content={m.message} />
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary btn-wide"
+                onClick={() => {
+                  setReportCode(selected.report_code)
+                  setReportLookup(selected)
+                  syncReportChatFromCloud(selected)
+                  setModal('')
+                  setPage('status')
+                }}
+              >
+                <Bot size={16} /> Buka & Balas di Halaman Chatbot
+              </button>
+            </div>
+          ) : detailTab === 'Detail laporan' || !isAdmin ? (
             <div className="detail-layout">
               <div className="detail-photo" style={{ overflow: 'hidden', position: 'relative' }}>
                 {isAdmin ? (
@@ -1838,14 +1941,26 @@ function App() {
                         ))}
                       </select>
                     </div>
-                    <button
-                      type="button"
-                      className="btn btn-outline"
-                      style={{ marginTop: '10px', color: '#dc2626', borderColor: '#fecaca', background: '#fef2f2' }}
-                      onClick={() => deleteReport(selected)}
-                    >
-                      <Trash2 size={15} /> Hapus Laporan
-                    </button>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
+                      <button
+                        type="button"
+                        className="btn btn-outline"
+                        onClick={() => {
+                          setDetailTab('Riwayat Chat')
+                          syncReportChatFromCloud(selected)
+                        }}
+                      >
+                        <Bot size={15} /> Riwayat Chat AI
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline"
+                        style={{ color: '#dc2626', borderColor: '#fecaca', background: '#fef2f2' }}
+                        onClick={() => deleteReport(selected)}
+                      >
+                        <Trash2 size={15} /> Hapus Laporan
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <button
