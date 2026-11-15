@@ -520,6 +520,21 @@ begin
 end $$;
 grant execute on function public.admin_update_report(uuid, text, text, text, text, uuid) to anon, authenticated, service_role;
 
+-- Admin Delete RPC (agar Admin dapat menghapus laporan langsung dari Dashboard Admin maupun per kode/id)
+create or replace function public.admin_delete_report(
+  p_report_id uuid default null,
+  p_report_code text default null
+) returns jsonb language plpgsql security definer set search_path = '' as $$
+begin
+  if p_report_id is not null then
+    delete from public.reports where id = p_report_id;
+  elsif p_report_code is not null then
+    delete from public.reports where report_code = upper(trim(p_report_code));
+  end if;
+  return jsonb_build_object('ok', true);
+end $$;
+grant execute on function public.admin_delete_report(uuid, text) to anon, authenticated, service_role;
+
 -- Tema 8 & 5: Fungsi Agregasi SQL Deterministik untuk FR-09 (Ringkasan AI)
 create or replace function public.get_report_statistics(p_days integer default 7) returns jsonb
 language sql stable security definer set search_path = '' as $$

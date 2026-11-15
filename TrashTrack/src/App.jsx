@@ -26,6 +26,7 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  Trash2,
   UploadCloud,
   X
 } from 'lucide-react'
@@ -400,6 +401,52 @@ function App() {
         ? 'Validasi dan koreksi hasil AI berhasil disimpan.'
         : `Status laporan ${selected.report_code} diperbarui menjadi "${changes.status}".`
     )
+  }
+
+  // Hapus laporan dari Dashboard Admin & Database Supabase
+  const deleteReport = async targetReport => {
+    const r = targetReport || selected
+    if (!r) return
+    if (!isAdmin) {
+      setModal('login')
+      setNotice('Hanya Admin Kebersihan yang dapat menghapus laporan.')
+      return
+    }
+    if (typeof window !== 'undefined' && !window.confirm(`Hapus permanen laporan ${r.report_code}?`)) {
+      return
+    }
+
+    const nextList = reports.filter(item => item.report_code !== r.report_code && item.id !== r.id)
+    setReports(nextList)
+    saveCachedReports(nextList)
+    try {
+      localStorage.removeItem(`unklab_photo_${r.report_code}`)
+    } catch {}
+
+    if (selected?.report_code === r.report_code) {
+      setSelected(nextList[0] || null)
+    }
+    if (reportLookup?.report_code === r.report_code) {
+      setReportLookup(nextList[0] || null)
+    }
+    if (modal === 'detail') {
+      setModal('')
+    }
+
+    if (supabase) {
+      try {
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(r.id || ''))
+        const { error: rpcErr } = await supabase.rpc('admin_delete_report', {
+          p_report_id: isUuid ? r.id : null,
+          p_report_code: r.report_code
+        })
+        if (rpcErr && session) {
+          await supabase.from('reports').delete().eq('report_code', r.report_code)
+        }
+      } catch {}
+    }
+
+    setNotice(`Laporan ${r.report_code} berhasil dihapus.`)
   }
 
   // Pemilihan berkas foto dengan validasi format JPG/PNG/WEBP & ukuran <= 5 MB (Tema 6 & 11)
@@ -1322,6 +1369,7 @@ function App() {
                 setDetailTab('Detail laporan')
                 setModal('detail')
               }}
+              onDelete={deleteReport}
               onMakeSummary={makeSummary}
               isSummaryLoading={isSummaryLoading}
             />
@@ -1775,20 +1823,30 @@ function App() {
                 </div>
 
                 {isAdmin ? (
-                  <div className="field" style={{ marginTop: '12px' }}>
-                    <label>Perbarui status penanganan</label>
-                    <select
-                      className="text-input"
-                      value={selected.status}
-                      onChange={e => updateSelected({ status: e.target.value })}
+                  <>
+                    <div className="field" style={{ marginTop: '12px' }}>
+                      <label>Perbarui status penanganan</label>
+                      <select
+                        className="text-input"
+                        value={selected.status}
+                        onChange={e => updateSelected({ status: e.target.value })}
+                      >
+                        {statuses.map(s => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-outline"
+                      style={{ marginTop: '10px', color: '#dc2626', borderColor: '#fecaca', background: '#fef2f2' }}
+                      onClick={() => deleteReport(selected)}
                     >
-                      {statuses.map(s => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                      <Trash2 size={15} /> Hapus Laporan
+                    </button>
+                  </>
                 ) : (
                   <button
                     className="btn btn-outline"
@@ -2101,6 +2159,7 @@ function ReportsPage({
   query,
   setQuery,
   onDetail,
+  onDelete,
   onMakeSummary,
   isSummaryLoading
 }) {
@@ -2193,9 +2252,10 @@ function ReportsPage({
                     <Status status={r.status} />
                   </td>
                   <td className="muted-cell">{dateLabel(r.created_at)}</td>
-                  <td>
+                  <td style={{ display: 'flex', gap: '4px', alignItems: 'center', justifyContent: 'flex-end' }}>
                     <button
                       className="row-arrow"
+                      title="Buka detail & validasi AI"
                       onClick={e => {
                         e.stopPropagation()
                         setSelected(r)
@@ -2203,6 +2263,17 @@ function ReportsPage({
                       }}
                     >
                       <ArrowRight size={15} />
+                    </button>
+                    <button
+                      className="row-arrow"
+                      title={`Hapus laporan ${r.report_code}`}
+                      style={{ color: '#dc2626' }}
+                      onClick={e => {
+                        e.stopPropagation()
+                        onDelete?.(r)
+                      }}
+                    >
+                      <Trash2 size={14} />
                     </button>
                   </td>
                 </tr>
@@ -2225,9 +2296,19 @@ function ReportsPage({
               <MapPin size={13} /> {unklabZoneName(selected)} · {dateLabel(selected.created_at)}
             </span>
           </div>
-          <button className="btn btn-primary" onClick={onDetail}>
-            Validasi AI & Ubah Status <ArrowRight size={15} />
-          </button>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button
+              type="button"
+              className="btn btn-outline"
+              style={{ color: '#dc2626', borderColor: '#fecaca', background: '#fef2f2' }}
+              onClick={() => onDelete?.(selected)}
+            >
+              <Trash2 size={15} /> Hapus
+            </button>
+            <button className="btn btn-primary" onClick={onDetail}>
+              Validasi AI & Ubah Status <ArrowRight size={15} />
+            </button>
+          </div>
         </div>
       ) : (
         <div className="empty-state panel">Pilih salah satu laporan di atas untuk memvalidasi hasil AI atau memperbarui status.</div>
