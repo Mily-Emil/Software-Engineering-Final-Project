@@ -445,14 +445,14 @@ begin
 end $$;
 grant execute on function public.append_chat_message(text, public.chat_sender, text) to anon, authenticated;
 
--- Tema 6: Peta publik dengan privasi penuh (tanpa ip_hash atau device_id)
+-- Tema 6: Peta publik dengan tetap menyertakan photo_url yang sudah dibersihkan EXIF-nya (tanpa ip_hash atau device_id)
 create or replace function public.get_public_reports() returns jsonb
 language sql stable security definer set search_path = '' as $$
   select coalesce(jsonb_agg(
     jsonb_build_object(
       'id', r.id,
       'report_code', r.report_code,
-      'photo_url', null,
+      'photo_url', r.photo_url,
       'latitude', r.latitude,
       'longitude', r.longitude,
       'description', r.description,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -6,6 +6,7 @@ import {
   ArrowRight,
   ArrowUpRight,
   Bot,
+  Camera,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -20,6 +21,7 @@ import {
   Menu,
   MessageCircle,
   Plus,
+  RefreshCw,
   Search,
   Send,
   ShieldCheck,
@@ -76,13 +78,20 @@ function readCachedReports() {
 function saveCachedReports(list) {
   try {
     if (!Array.isArray(list)) return
-    const compact = list.slice(0, 40).map(r => ({
-      ...r,
-      photo_url:
-        typeof r.photo_url === 'string' && r.photo_url.length > 120000
-          ? r.report_code
-          : r.photo_url
-    }))
+    const compact = list.slice(0, 25).map(r => {
+      if (r.photo_url?.startsWith('data:image/') && r.report_code) {
+        try {
+          localStorage.setItem(`unklab_photo_${r.report_code}`, r.photo_url)
+        } catch {}
+      }
+      return {
+        ...r,
+        photo_url:
+          typeof r.photo_url === 'string' && r.photo_url.length > 350000
+            ? r.report_code
+            : r.photo_url
+      }
+    })
     localStorage.setItem(REPORTS_CACHE_KEY, JSON.stringify(compact))
   } catch {
     // Abaikan jika kuota localStorage penuh
@@ -172,6 +181,11 @@ function App() {
   const [isChatLoading, setIsChatLoading] = useState(false)
   const [file, setFile] = useState(null)
   const [previewUrl, setPreviewUrl] = useState('')
+  const [cameraOpen, setCameraOpen] = useState(false)
+  const [cameraFacing, setCameraFacing] = useState('environment')
+  const videoRef = useRef(null)
+  const streamRef = useRef(null)
+  const nativeCameraInputRef = useRef(null)
   const [coords, setCoords] = useState(DEFAULT_LOCATION)
   const [locationSource, setLocationSource] = useState('manual')
   const [locationAccuracy, setLocationAccuracy] = useState(null)
@@ -424,6 +438,88 @@ function App() {
     }
   }
 
+  // Fitur Tambahan: Akses Kamera Langsung dari Handphone / Laptop (WebRTC getUserMedia + Fallback Kamera Native HP)
+  const stopCameraStream = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop())
+      streamRef.current = null
+    }
+    setCameraOpen(false)
+  }
+
+  const startCameraStream = async (facing = cameraFacing) => {
+    try {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop())
+        streamRef.current = null
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        nativeCameraInputRef.current?.click()
+        return
+      }
+      let stream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
+        })
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+      }
+      streamRef.current = stream
+      setCameraFacing(facing)
+      setCameraOpen(true)
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+          videoRef.current.play().catch(() => {})
+        }
+      }, 60)
+    } catch {
+      // Jika izin kamera browser ditolak atau tidak didukung, buka aplikasi kamera native HP (capture="environment")
+      nativeCameraInputRef.current?.click()
+    }
+  }
+
+  const switchCameraFacing = () => {
+    const nextFacing = cameraFacing === 'environment' ? 'user' : 'environment'
+    startCameraStream(nextFacing)
+  }
+
+  const capturePhotoFromCamera = async () => {
+    const video = videoRef.current
+    if (!video) return
+    const width = video.videoWidth || 800
+    const height = video.videoHeight || 600
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(video, 0, 0, width, height)
+
+    canvas.toBlob(
+      async blob => {
+        if (!blob) return
+        const rawCameraFile = new File([blob], `kamera-unklab-${Date.now()}.jpg`, {
+          type: 'image/jpeg',
+          lastModified: Date.now()
+        })
+        stopCameraStream()
+        try {
+          const { file: cleanFile, previewUrl: cleanUrl } = await stripExifAndCompress(rawCameraFile)
+          setFile(cleanFile)
+          setPreviewUrl(cleanUrl)
+          setNotice('Foto dari kamera berhasil diambil dan siap dianalisis Gemini Vision.')
+        } catch {
+          setFile(rawCameraFile)
+          setPreviewUrl(canvas.toDataURL('image/jpeg', 0.82))
+        }
+      },
+      'image/jpeg',
+      0.85
+    )
+  }
+
   // Alur Pengiriman Laporan & Analisis Foto (Tema 1, 2, 3, 4, 8, 9, 11)
   const handleReport = async event => {
     event.preventDefault()
@@ -581,7 +677,6 @@ function App() {
       setChat(savedReport.chat_messages)
       setModal('')
       setPage('analysis')
-      setFile(null)
 
       if (savedReport.analysis?.is_waste === false || savedReport.status === 'Ditolak') {
         setNotice(`Laporan ditolak oleh AI: Foto bukan sampah kampus. ${savedReport.analysis?.detected_notes || ''}`)
@@ -1340,32 +1435,96 @@ function App() {
         <Modal
           title="Buat laporan titik sampah baru"
           subtitle="Khusus area Kampus Universitas Klabat (Unklab), Airmadidi."
-          onClose={() => !isSubmitting && setModal('')}
+          onClose={() => {
+            if (!isSubmitting) {
+              stopCameraStream()
+              setModal('')
+            }
+          }}
         >
           <form className="form-stack" onSubmit={handleReport}>
-            <label className="upload-zone">
-              {file ? (
-                <>
-                  <CheckCircle2 size={23} />
-                  <b>{file.name}</b>
-                  <small>
-                    {(file.size / 1024 / 1024).toFixed(2)} MB · Siap dianalisis Gemini Vision
-                  </small>
-                </>
-              ) : (
-                <>
-                  <UploadCloud size={25} />
-                  <b>Unggah foto titik sampah</b>
-                  <small>Format JPG atau PNG · Maksimal 5 MB</small>
-                  <span className="upload-cta">Pilih foto</span>
-                </>
-              )}
-              <input
-                type="file"
-                accept="image/jpeg,image/png"
-                onChange={handleFileChange}
-              />
-            </label>
+            {cameraOpen ? (
+              <div className="camera-live-box">
+                <video ref={videoRef} autoPlay playsInline muted className="camera-video-preview" />
+                <div className="camera-controls-bar">
+                  <button type="button" className="btn btn-outline btn-small" onClick={switchCameraFacing}>
+                    <RefreshCw size={14} /> Putar Kamera
+                  </button>
+                  <button type="button" className="btn btn-primary btn-small" onClick={capturePhotoFromCamera}>
+                    <Camera size={15} /> Ambil Foto
+                  </button>
+                  <button type="button" className="btn btn-outline btn-small" onClick={stopCameraStream}>
+                    <X size={14} /> Tutup
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="upload-box-wrapper">
+                <label className={`upload-zone ${previewUrl ? 'has-preview' : ''}`}>
+                  {previewUrl && file ? (
+                    <div className="upload-preview-card">
+                      <img src={previewUrl} alt="Pratinjau foto" className="upload-preview-img" />
+                      <div className="upload-preview-meta">
+                        <CheckCircle2 size={18} />
+                        <div>
+                          <b>{file.name}</b>
+                          <small>
+                            {(file.size / 1024 / 1024).toFixed(2)} MB · Siap dianalisis Gemini Vision
+                          </small>
+                        </div>
+                      </div>
+                    </div>
+                  ) : file ? (
+                    <>
+                      <CheckCircle2 size={23} />
+                      <b>{file.name}</b>
+                      <small>
+                        {(file.size / 1024 / 1024).toFixed(2)} MB · Siap dianalisis Gemini Vision
+                      </small>
+                    </>
+                  ) : (
+                    <>
+                      <UploadCloud size={25} />
+                      <b>Unggah atau ambil foto titik sampah</b>
+                      <small>Format JPG, PNG, atau WEBP · Maksimal 5 MB</small>
+                      <span className="upload-cta">Pilih dari Galeri atau Gunakan Kamera</span>
+                    </>
+                  )}
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={handleFileChange}
+                  />
+                </label>
+
+                {/* Input tersembunyi khusus pemicu aplikasi kamera bawaan HP (Android/iOS) */}
+                <input
+                  ref={nativeCameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  style={{ display: 'none' }}
+                  onChange={handleFileChange}
+                />
+
+                <div className="camera-action-row">
+                  <button
+                    type="button"
+                    className="camera-trigger-btn primary-cam"
+                    onClick={() => startCameraStream('environment')}
+                  >
+                    <Camera size={15} /> Buka Kamera Langsung
+                  </button>
+                  <button
+                    type="button"
+                    className="camera-trigger-btn"
+                    onClick={() => nativeCameraInputRef.current?.click()}
+                  >
+                    <Camera size={15} /> Kamera HP
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="field">
               <label>Lokasi titik sampah di Kampus Universitas Klabat</label>
