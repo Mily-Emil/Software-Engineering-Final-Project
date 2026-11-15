@@ -3,9 +3,56 @@
 // serta Marker resmi Google Maps untuk titik laporan sampah dan pemilih lokasi.
 import React, { useEffect, useState } from 'react'
 import { APIProvider, Marker, Map, useMap, useMapsLibrary } from '@vis.gl/react-google-maps'
+import { AlertTriangle } from 'lucide-react'
 import { MAP_VIEW_BOUNDS, UNKLAB_CENTER, UNKLAB_POLYGON } from '../lib/ai'
 
 export const GOOGLE_MAPS_API_KEY = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '').trim()
+
+// Diagnostik Otomatis Kendala Google Maps Platform (Billing, Referrer, Quota, dsb.)
+let detectedAuthError = null
+const authListeners = new Set()
+
+if (typeof window !== 'undefined') {
+  // Callback resmi Google Maps JavaScript API ketika autentikasi API Key ditolak
+  const prevAuthFailure = window.gm_authFailure
+  window.gm_authFailure = function () {
+    if (!detectedAuthError) {
+      detectedAuthError = {
+        code: 'AuthFailure',
+        message: 'Google Maps mendeteksi masalah autentikasi API Key (kemungkinan Billing belum aktif pada project Google Cloud atau Domain dibatasi).'
+      }
+      authListeners.forEach(fn => fn(detectedAuthError))
+    }
+    if (typeof prevAuthFailure === 'function') {
+      try { prevAuthFailure() } catch {}
+    }
+  }
+
+  // Sadap log console error dari Google Maps untuk menangkap kode error persisnya
+  const prevConsoleError = console.error
+  console.error = function (...args) {
+    prevConsoleError.apply(console, args)
+    try {
+      const fullMsg = args.map(a => (typeof a === 'string' ? a : a?.message || '')).join(' ')
+      if (fullMsg.includes('Google Maps JavaScript API error:')) {
+        const match = fullMsg.match(/Google Maps JavaScript API error:\s*([A-Za-z0-9]+)/)
+        const code = match ? match[1] : 'GoogleMapsAuthError'
+        let message = fullMsg
+        if (code === 'BillingNotEnabledMapError') {
+          message = 'Cloud Billing belum diaktifkan pada project Google Cloud. Google mewajibkan akun penagihan (billing account) ditautkan ke project untuk menampilkan peta.'
+        } else if (code === 'RefererNotAllowedMapError') {
+          message = 'Domain/URL website saat ini diblokir oleh Application Restrictions (Website Restrictions) di Google Cloud Console. Ubah ke "None" lalu simpan.'
+        } else if (code === 'ApiNotActivatedMapError') {
+          message = 'Maps JavaScript API belum diaktifkan pada project Google Cloud yang memiliki API Key ini.'
+        } else if (code === 'InvalidKeyMapError') {
+          message = 'API Key Google Maps tidak valid atau salah.'
+        }
+        detectedAuthError = { code, message }
+        authListeners.forEach(fn => fn(detectedAuthError))
+      }
+    } catch {}
+  }
+}
 
 // Ikon Pin Resmi Google Maps sesuai status laporan TrashTrack Unklab
 const GOOGLE_PIN_ICONS = {
@@ -149,6 +196,14 @@ function CampusGoogleMapInner({
   fillOpacity = 0.06,
   showControls = true
 }) {
+  const [authError, setAuthError] = useState(() => detectedAuthError)
+
+  useEffect(() => {
+    const handler = err => setAuthError(err)
+    authListeners.add(handler)
+    return () => authListeners.delete(handler)
+  }, [])
+
   // 'm' = Google Maps Standard Roadmap | 'y' = Google Maps Hybrid (Satelit + Label Gedung Kampus)
   const [layerType, setLayerType] = useState('m')
   const mapTypeId = layerType === 'y' ? 'hybrid' : 'roadmap'
@@ -217,6 +272,53 @@ function CampusGoogleMapInner({
         <CampusBoundaryPolygon isHybrid={layerType === 'y'} fillOpacity={fillOpacity} />
         <CampusMapMarkers reports={reports} onMarkerClick={onMarkerClick} pickPosition={pickPosition} />
       </Map>
+
+      {authError && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '30px',
+            left: '10px',
+            right: '10px',
+            zIndex: 10,
+            background: 'rgba(255, 255, 255, 0.96)',
+            border: '1px solid #ef4444',
+            borderRadius: '8px',
+            padding: '10px 12px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
+            fontSize: '11px',
+            color: '#1e293b',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '5px'
+          }}
+        >
+          <div style={{ fontWeight: 700, color: '#dc2626', display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <AlertTriangle size={14} />
+            <span>Kendala Autentikasi Google Maps ({authError.code})</span>
+          </div>
+          <div style={{ lineHeight: 1.35, color: '#475569' }}>{authError.message}</div>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '2px' }}>
+            <a
+              href="https://console.cloud.google.com/google/maps-apis/overview"
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                display: 'inline-block',
+                background: '#dc2626',
+                color: '#ffffff',
+                padding: '3px 8px',
+                borderRadius: '4px',
+                textDecoration: 'none',
+                fontWeight: 600,
+                fontSize: '11px'
+              }}
+            >
+              Buka Google Cloud Console ↗
+            </a>
+          </div>
+        </div>
+      )}
 
       <a
         className="gmap-badge"
