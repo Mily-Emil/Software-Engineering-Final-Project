@@ -7,48 +7,54 @@ import { GoogleMapsProvider } from './components/CampusMap'
 class AppErrorBoundary extends React.Component {
   constructor(props) {
     super(props)
-    this.state = { hasError: false }
+    this.state = { hasError: false, error: null, errorInfo: null }
   }
 
-  static getDerivedStateFromError() {
-    return { hasError: true }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error }
   }
 
-  componentDidCatch(error) {
-    console.warn('Recovering from render error:', error)
-    try {
-      localStorage.removeItem('unklab_reports_cache_v1')
-    } catch {}
+  componentDidCatch(error, errorInfo) {
+    console.error('Error caught by AppErrorBoundary:', error, errorInfo)
+    this.setState({ error, errorInfo })
   }
 
   render() {
     if (this.state.hasError) {
+      const errStr = this.state.error ? (this.state.error.stack || this.state.error.message || String(this.state.error)) : 'Unknown error'
       return (
-        <div style={{ padding: '40px 24px', textAlign: 'center', fontFamily: 'Plus Jakarta Sans, sans-serif' }}>
-          <h2 style={{ color: '#1b6943', marginBottom: '8px' }}>Memuat ulang data TrashTrack...</h2>
-          <p style={{ color: '#64748b', fontSize: '14px', marginBottom: '16px' }}>
-            Cache lokal telah dibersihkan agar sinkron dengan pembaruan database terbaru.
+        <div style={{ padding: '30px 20px', textAlign: 'center', fontFamily: 'system-ui, sans-serif' }}>
+          <h2 style={{ color: '#1b6943', marginBottom: '8px' }}>Terjadi Kendala Memuat Data</h2>
+          <p style={{ color: '#64748b', fontSize: '13px', marginBottom: '14px' }}>
+            Klik tombol di bawah untuk membersihkan seluruh cache lokal dan memuat ulang data segar dari server.
           </p>
-          <button
-            type="button"
-            onClick={() => {
-              try {
-                localStorage.removeItem('unklab_reports_cache_v1')
-              } catch {}
-              window.location.reload()
-            }}
-            style={{
-              background: '#197b51',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '8px',
-              padding: '10px 18px',
-              fontWeight: 700,
-              cursor: 'pointer'
-            }}
-          >
-            Muat Ulang Halaman
-          </button>
+          <div style={{ maxWidth: '750px', margin: '0 auto 16px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '12px', textAlign: 'left', fontSize: '12px', color: '#991b1b', overflowX: 'auto', fontFamily: 'monospace' }}>
+            <strong>Detail Masalah:</strong>
+            <pre style={{ marginTop: '6px', whiteSpace: 'pre-wrap' }}>{errStr}</pre>
+          </div>
+          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  localStorage.clear()
+                  sessionStorage.clear()
+                } catch {}
+                window.location.reload()
+              }}
+              style={{
+                background: '#197b51',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '8px',
+                padding: '10px 20px',
+                fontWeight: 700,
+                cursor: 'pointer'
+              }}
+            >
+              Reset Cache & Muat Ulang Penuh
+            </button>
+          </div>
         </div>
       )
     }
