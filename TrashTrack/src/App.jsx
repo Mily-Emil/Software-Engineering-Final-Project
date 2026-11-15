@@ -1507,20 +1507,13 @@ function App() {
                   onChange={handleFileChange}
                 />
 
-                <div className="camera-action-row">
+                <div className="camera-action-row single">
                   <button
                     type="button"
                     className="camera-trigger-btn primary-cam"
                     onClick={() => startCameraStream('environment')}
                   >
-                    <Camera size={15} /> Buka Kamera Langsung
-                  </button>
-                  <button
-                    type="button"
-                    className="camera-trigger-btn"
-                    onClick={() => nativeCameraInputRef.current?.click()}
-                  >
-                    <Camera size={15} /> Kamera HP
+                    <Camera size={15} /> Buka Kamera
                   </button>
                 </div>
               </div>
