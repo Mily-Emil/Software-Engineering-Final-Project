@@ -97,10 +97,7 @@ function normalizeReportItem(r) {
       corrected_category: rawAnalysis.corrected_category ?? r.corrected_category ?? null,
       corrected_severity: rawAnalysis.corrected_severity ?? r.corrected_severity ?? null,
       admin_notes: rawAnalysis.admin_notes ?? r.admin_notes ?? null
-    },
-    chat_messages: Array.isArray(r.chat_messages)
-      ? r.chat_messages.filter(m => m && typeof m.message === 'string')
-      : []
+    }
   }
 }
 
@@ -152,11 +149,7 @@ function mergeReportLists(remoteList = [], localList = []) {
     byCode.set(item.report_code, {
       ...existing,
       ...item,
-      photo_url: item.photo_url || existing?.photo_url || null,
-      chat_messages:
-        Array.isArray(item.chat_messages) && item.chat_messages.length >= (existing?.chat_messages?.length || 0)
-          ? item.chat_messages
-          : existing?.chat_messages || item.chat_messages || []
+      photo_url: item.photo_url || existing?.photo_url || null
     })
   }
   return Array.from(byCode.values()).sort(
@@ -307,13 +300,12 @@ function App() {
       if (session) {
         const { data } = await supabase
           .from('reports')
-          .select('*, ai_analysis(*), chat_messages(*)')
+          .select('*, ai_analysis(*)')
           .order('created_at', { ascending: false })
         if (data?.length) {
           const rows = data.map(r => ({
             ...r,
-            analysis: Array.isArray(r.ai_analysis) ? r.ai_analysis[0] : r.ai_analysis,
-            chat_messages: Array.isArray(r.chat_messages) ? r.chat_messages : []
+            analysis: Array.isArray(r.ai_analysis) ? r.ai_analysis[0] : r.ai_analysis
           }))
           setReports(prev => {
             const merged = mergeReportLists(rows, prev)
@@ -674,8 +666,7 @@ function App() {
             needs_review: Boolean(edgeData.needs_review),
             created_at: edgeData.created_at || new Date().toISOString(),
             photo_url: previewUrl || edgeData.photo_url,
-            analysis: edgeData.analysis,
-            chat_messages: [{ sender: 'ai', message: initialMsg, created_at: new Date().toISOString() }]
+            analysis: edgeData.analysis
           }
         }
       }
@@ -745,8 +736,7 @@ function App() {
           needs_review: Boolean(aiResult.needs_review),
           created_at: createdAt,
           photo_url: previewUrl,
-          analysis: aiResult,
-          chat_messages: [{ sender: 'ai', message: initialAdvice, created_at: createdAt }]
+          analysis: aiResult
         }
       }
 
@@ -763,7 +753,7 @@ function App() {
       setSelected(savedReport)
       setReportCode(savedReport.report_code)
       setReportLookup(savedReport)
-      setChat(savedReport.chat_messages)
+      setChat([{ sender: 'ai', message: buildInitialAdvice(savedReport.analysis, savedReport) }])
       setModal('')
       setPage('analysis')
 
@@ -782,44 +772,6 @@ function App() {
   }
 
   // Sinkronisasi riwayat chat laporan dari Supabase agar Admin & Pelapor di perangkat berbeda melihat riwayat chat yang sama
-  const syncReportChatFromCloud = async targetReport => {
-    const code = targetReport?.report_code?.trim()?.toUpperCase()
-    if (!code) return null
-
-    const fallbackHistory =
-      targetReport?.chat_messages?.length > 0
-        ? targetReport.chat_messages
-        : [{ sender: 'ai', message: buildInitialAdvice(targetReport?.analysis, targetReport) }]
-
-    setChat(fallbackHistory)
-
-    if (!supabase) return targetReport
-    try {
-      const { data, error } = await supabase.rpc('get_report_by_code', { p_code: code })
-      if (data && !error) {
-        const cloudHistory =
-          Array.isArray(data.chat_messages) && data.chat_messages.length > 0
-            ? data.chat_messages
-            : fallbackHistory
-        const mergedReport = {
-          ...targetReport,
-          ...data,
-          photo_url: data.photo_url || targetReport?.photo_url || null,
-          analysis: data.analysis || targetReport?.analysis,
-          chat_messages: cloudHistory.length >= fallbackHistory.length ? cloudHistory : fallbackHistory
-        }
-        setChat(mergedReport.chat_messages)
-        setSelected(prev => (prev?.report_code === code ? mergedReport : prev))
-        setReportLookup(prev => (prev?.report_code === code ? mergedReport : prev))
-        setReports(prev => prev.map(r => (r.report_code === code ? mergedReport : r)))
-        return mergedReport
-      }
-    } catch {
-      // Gunakan riwayat lokal jika offline
-    }
-    return targetReport
-  }
-
   // Cek Status Laporan dengan Kode Unik (FR-03, Skenario 11 & 12)
   const lookup = async e => {
     e.preventDefault()
@@ -833,7 +785,7 @@ function App() {
     if (foundLocal) {
       setReportLookup(foundLocal)
       setSelected(foundLocal)
-      await syncReportChatFromCloud(foundLocal)
+      setChat([{ sender: 'ai', message: buildInitialAdvice(foundLocal.analysis, foundLocal) }])
       return
     }
 
@@ -842,14 +794,11 @@ function App() {
       if (data && !error) {
         const r = {
           ...data,
-          analysis: data.analysis,
-          chat_messages: Array.isArray(data.chat_messages) && data.chat_messages.length
-            ? data.chat_messages
-            : [{ sender: 'ai', message: buildInitialAdvice(data.analysis, data) }]
+          analysis: data.analysis
         }
         setReportLookup(r)
         setSelected(r)
-        setChat(r.chat_messages)
+        setChat([{ sender: 'ai', message: buildInitialAdvice(data.analysis, data) }])
         setReports(prev => mergeReportLists([r], prev))
         return
       }
@@ -859,7 +808,7 @@ function App() {
     setNotice('Laporan tidak ditemukan. Periksa kembali kode laporan Anda.')
   }
 
-  // Chatbot Solusi (Tema 5: Batas 10 pesan per laporan & maks 300 char)
+  // Chatbot Solusi AI (Stateless — tanpa riwayat chat persisten, batas 10 pertanyaan per sesi)
   const sendChat = async () => {
     if (!newMessage.trim() || isChatLoading) return
     const activeReport = reportLookup || selected
@@ -876,14 +825,6 @@ function App() {
     setIsChatLoading(true)
 
     try {
-      if (supabase && activeReport?.report_code) {
-        await supabase.rpc('append_chat_message', {
-          p_code: activeReport.report_code,
-          p_sender: 'user',
-          p_message: userText
-        })
-      }
-
       const aiReply = await generateChatbotAnswer({
         message: userText,
         report: activeReport,
@@ -891,30 +832,8 @@ function App() {
         supabase
       })
 
-      if (supabase && activeReport?.report_code) {
-        await supabase.rpc('append_chat_message', {
-          p_code: activeReport.report_code,
-          p_sender: 'ai',
-          p_message: aiReply
-        })
-      }
-
       const updatedHistory = [...nextHistory, { sender: 'ai', message: aiReply }]
       setChat(updatedHistory)
-      if (activeReport) {
-        const updatedReport = { ...activeReport, chat_messages: updatedHistory }
-        setReportLookup(prev =>
-          prev?.id === activeReport.id || prev?.report_code === activeReport.report_code ? updatedReport : prev
-        )
-        setSelected(prev =>
-          prev?.id === activeReport.id || prev?.report_code === activeReport.report_code ? updatedReport : prev
-        )
-        setReports(prev =>
-          prev.map(r =>
-            r.id === activeReport.id || r.report_code === activeReport.report_code ? updatedReport : r
-          )
-        )
-      }
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'Gagal mengirim pesan chat.')
     } finally {
@@ -1273,11 +1192,7 @@ function App() {
                               } else {
                                 setReportCode(r.report_code)
                                 setReportLookup(r)
-                                setChat(
-                                  r.chat_messages?.length
-                                    ? r.chat_messages
-                                    : [{ sender: 'ai', message: buildInitialAdvice(r.analysis, r) }]
-                                )
+                                setChat([{ sender: 'ai', message: buildInitialAdvice(r.analysis, r) }])
                                 setPage('status')
                               }
                             }}
@@ -1461,7 +1376,6 @@ function App() {
               setQuery={setQuery}
               onDetail={() => {
                 setDetailTab('Detail laporan')
-                if (selected) syncReportChatFromCloud(selected)
                 setModal('detail')
               }}
               onDelete={deleteReport}
@@ -1522,13 +1436,13 @@ function App() {
                 setSelected(r)
                 setReportCode(r.report_code)
                 setReportLookup(r)
-                syncReportChatFromCloud(r)
+                setChat([{ sender: 'ai', message: buildInitialAdvice(r.analysis, r) }])
               }}
               onGoToChatbot={r => {
                 setReportCode(r.report_code)
                 setReportLookup(r)
                 setSelected(r)
-                syncReportChatFromCloud(r)
+                setChat([{ sender: 'ai', message: buildInitialAdvice(r.analysis, r) }])
                 setPage('status')
               }}
               dateLabel={dateLabel}
@@ -1547,7 +1461,7 @@ function App() {
                 setReportCode(r.report_code)
                 setReportLookup(r)
                 setSelected(r)
-                syncReportChatFromCloud(r)
+                setChat([{ sender: 'ai', message: buildInitialAdvice(r.analysis, r) }])
               }}
               chat={chat}
               newMessage={newMessage}
@@ -1842,74 +1756,10 @@ function App() {
               >
                 Validasi & Koreksi AI
               </button>
-              <button
-                className={detailTab === 'Riwayat Chat' ? 'active' : ''}
-                onClick={() => {
-                  setDetailTab('Riwayat Chat')
-                  syncReportChatFromCloud(selected)
-                }}
-              >
-                Riwayat Chat AI ({(selected.chat_messages || []).length || 1})
-              </button>
             </div>
           )}
 
-          {detailTab === 'Riwayat Chat' && isAdmin ? (
-            <div className="validation-content">
-              <div
-                style={{
-                  maxHeight: '340px',
-                  overflowY: 'auto',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '10px',
-                  padding: '12px',
-                  background: '#f8fafc',
-                  borderRadius: '12px',
-                  border: '1px solid #e2e8f0',
-                  marginBottom: '14px'
-                }}
-              >
-                {(selected.chat_messages?.length
-                  ? selected.chat_messages
-                  : [{ sender: 'ai', message: buildInitialAdvice(selected.analysis, selected) }]
-                ).map((m, idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      alignSelf: m.sender === 'user' ? 'flex-end' : 'flex-start',
-                      maxWidth: '85%',
-                      padding: '10px 14px',
-                      borderRadius: '12px',
-                      background: m.sender === 'user' ? '#1b6943' : '#ffffff',
-                      color: m.sender === 'user' ? '#ffffff' : '#1e293b',
-                      border: m.sender === 'user' ? 'none' : '1px solid #e2e8f0',
-                      fontSize: '13px',
-                      lineHeight: 1.5
-                    }}
-                  >
-                    <strong style={{ display: 'block', fontSize: '11px', opacity: 0.78, marginBottom: '4px' }}>
-                      {m.sender === 'user' ? '👤 Pelapor / Pengguna' : '🤖 Chatbot Solusi AI'}
-                    </strong>
-                    <FormattedChatMessage content={m.message} />
-                  </div>
-                ))}
-              </div>
-              <button
-                type="button"
-                className="btn btn-primary btn-wide"
-                onClick={() => {
-                  setReportCode(selected.report_code)
-                  setReportLookup(selected)
-                  syncReportChatFromCloud(selected)
-                  setModal('')
-                  setPage('status')
-                }}
-              >
-                <Bot size={16} /> Buka & Balas di Halaman Chatbot
-              </button>
-            </div>
-          ) : detailTab === 'Detail laporan' || !isAdmin ? (
+          {detailTab === 'Detail laporan' || !isAdmin ? (
             <div className="detail-layout">
               <div className="detail-photo" style={{ overflow: 'hidden', position: 'relative' }}>
                 {isAdmin ? (
@@ -1994,16 +1844,6 @@ function App() {
                       <button
                         type="button"
                         className="btn btn-outline"
-                        onClick={() => {
-                          setDetailTab('Riwayat Chat')
-                          syncReportChatFromCloud(selected)
-                        }}
-                      >
-                        <Bot size={15} /> Riwayat Chat AI
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-outline"
                         style={{ color: '#dc2626', borderColor: '#fecaca', background: '#fef2f2' }}
                         onClick={() => deleteReport(selected)}
                       >
@@ -2017,11 +1857,7 @@ function App() {
                     onClick={() => {
                       setReportCode(selected.report_code)
                       setReportLookup(selected)
-                      setChat(
-                        selected.chat_messages?.length
-                          ? selected.chat_messages
-                          : [{ sender: 'ai', message: buildInitialAdvice(selected.analysis, selected) }]
-                      )
+                      setChat([{ sender: 'ai', message: buildInitialAdvice(selected.analysis, selected) }])
                       setModal('')
                       setPage('status')
                     }}
