@@ -28,7 +28,8 @@ import {
   Sparkles,
   Trash2,
   UploadCloud,
-  X
+  X,
+  XCircle
 } from 'lucide-react'
 import CampusGoogleMap from './components/CampusMap'
 import { supabase } from './lib/supabase'
@@ -1173,6 +1174,13 @@ function App() {
                   icon={<Clock3 size={17} />}
                   tone="orange"
                   helper="perlu tindak lanjut"
+                />
+                <StatCard
+                  title="Ditolak"
+                  value={count('Ditolak')}
+                  icon={<XCircle size={17} />}
+                  tone="red"
+                  helper="bukan sampah kampus"
                 />
                 <StatCard
                   title="Diproses"

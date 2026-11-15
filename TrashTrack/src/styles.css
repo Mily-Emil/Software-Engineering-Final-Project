@@ -359,7 +359,7 @@ button {
 }
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 14px;
 }
@@ -398,6 +398,10 @@ button {
 .stat-icon.orange {
   background: #fbf1e5;
   color: #d39245;
+}
+.stat-icon.red {
+  background: #fee2e2;
+  color: #dc2626;
 }
 .stat-icon.purple {
   background: #f1ecf7;
