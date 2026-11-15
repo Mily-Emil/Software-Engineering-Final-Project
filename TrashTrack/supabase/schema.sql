@@ -117,6 +117,8 @@ begin
     select 1 from information_schema.columns 
     where table_schema = 'public' and table_name = 'report_rate_limits' and column_name = 'ip_hash'
   ) then
+    execute 'alter table public.report_rate_limits alter column ip_hash drop not null';
+    execute 'alter table public.report_rate_limits alter column ip_hash set default ''''';
     execute 'update public.report_rate_limits set client_hash = coalesce(client_hash, ip_hash, '''') where client_hash is null';
   end if;
 end $$;
@@ -443,7 +445,7 @@ begin
 end $$;
 grant execute on function public.append_chat_message(text, public.chat_sender, text) to anon, authenticated;
 
--- Tema 6: Peta publik dengan privasi penuh (tanpa photo_url, ip_hash, atau device_id)
+-- Tema 6: Peta publik dengan privasi penuh (tanpa ip_hash atau device_id)
 create or replace function public.get_public_reports() returns jsonb
 language sql stable security definer set search_path = '' as $$
   select coalesce(jsonb_agg(
@@ -457,21 +459,66 @@ language sql stable security definer set search_path = '' as $$
       'status', r.status,
       'zone_name', r.zone_name,
       'location_source', r.location_source,
+      'location_accuracy', r.location_accuracy,
+      'needs_review', r.needs_review,
       'created_at', r.created_at,
       'analysis', jsonb_build_object(
         'is_waste', a.is_waste,
         'category', coalesce(a.corrected_category, a.category),
         'severity', coalesce(a.corrected_severity, a.severity),
         'confidence_score', a.confidence_score,
-        'is_validated', a.is_validated
+        'detected_notes', a.detected_notes,
+        'is_validated', a.is_validated,
+        'corrected_category', a.corrected_category,
+        'corrected_severity', a.corrected_severity,
+        'admin_notes', a.admin_notes,
+        'corrected_at', a.corrected_at
       )
     ) order by r.created_at desc
   ), '[]'::jsonb)
   from public.reports r
   left join public.ai_analysis a on a.report_id = r.id
-  where r.status::text <> 'Ditolak'
 $$;
 grant execute on function public.get_public_reports() to anon, authenticated;
+
+-- Admin Update RPC (agar pembaruan status dan validasi HITL dari Dashboard Admin selalu tersimpan ke database)
+create or replace function public.admin_update_report(
+  p_report_id uuid,
+  p_status text default null,
+  p_corrected_category text default null,
+  p_corrected_severity text default null,
+  p_admin_notes text default null,
+  p_admin_id uuid default null
+) returns jsonb language plpgsql security definer set search_path = '' as $$
+begin
+  if p_status is not null and p_status in ('Menunggu', 'Diproses', 'Selesai', 'Ditolak') then
+    update public.reports
+    set status = p_status::public.report_status,
+        updated_by = coalesce(p_admin_id, updated_by),
+        updated_at = now()
+    where id = p_report_id;
+  end if;
+
+  if p_corrected_category is not null or p_corrected_severity is not null or p_admin_notes is not null then
+    update public.ai_analysis
+    set is_validated = true,
+        corrected_category = case
+          when p_corrected_category in ('organik', 'anorganik') then p_corrected_category::public.waste_category
+          else corrected_category
+        end,
+        corrected_severity = case
+          when p_corrected_severity in ('rendah', 'sedang', 'tinggi') then p_corrected_severity::public.waste_severity
+          else corrected_severity
+        end,
+        admin_notes = coalesce(p_admin_notes, admin_notes),
+        corrected_by = coalesce(p_admin_id, corrected_by),
+        corrected_at = now()
+    where report_id = p_report_id;
+  end if;
+
+  return jsonb_build_object('ok', true);
+end $$;
+grant execute on function public.admin_update_report(uuid, text, text, text, text, uuid) to anon, authenticated, service_role;
 
 -- Tema 8 & 5: Fungsi Agregasi SQL Deterministik untuk FR-09 (Ringkasan AI)
 create or replace function public.get_report_statistics(p_days integer default 7) returns jsonb

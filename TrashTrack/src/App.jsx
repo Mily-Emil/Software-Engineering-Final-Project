@@ -60,6 +60,57 @@ const dateLabel = date =>
 
 const ADMIN_SESSION_TTL_MS = 2 * 60 * 60 * 1000 // Masa berlaku sesi Admin: 2 jam (Tema 10)
 const LOCKOUT_STORAGE_KEY = 'unklab_admin_lockout'
+const REPORTS_CACHE_KEY = 'unklab_reports_cache_v1'
+
+function readCachedReports() {
+  try {
+    const raw = localStorage.getItem(REPORTS_CACHE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function saveCachedReports(list) {
+  try {
+    if (!Array.isArray(list)) return
+    const compact = list.slice(0, 40).map(r => ({
+      ...r,
+      photo_url:
+        typeof r.photo_url === 'string' && r.photo_url.length > 120000
+          ? r.report_code
+          : r.photo_url
+    }))
+    localStorage.setItem(REPORTS_CACHE_KEY, JSON.stringify(compact))
+  } catch {
+    // Abaikan jika kuota localStorage penuh
+  }
+}
+
+function mergeReportLists(remoteList = [], localList = []) {
+  const byCode = new Map()
+  for (const item of localList) {
+    if (item?.report_code) byCode.set(item.report_code, item)
+  }
+  for (const item of remoteList) {
+    if (!item?.report_code) continue
+    const existing = byCode.get(item.report_code)
+    byCode.set(item.report_code, {
+      ...existing,
+      ...item,
+      photo_url: item.photo_url || existing?.photo_url || null,
+      chat_messages:
+        Array.isArray(item.chat_messages) && item.chat_messages.length > 0
+          ? item.chat_messages
+          : existing?.chat_messages || []
+    })
+  }
+  return Array.from(byCode.values()).sort(
+    (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+  )
+}
 
 function readValidSessionProfile() {
   try {
@@ -96,8 +147,8 @@ function readLockoutState() {
 
 function App() {
   const [page, setPage] = useState('overview')
-  const [reports, setReports] = useState([])
-  const [selected, setSelected] = useState(null)
+  const [reports, setReports] = useState(() => readCachedReports())
+  const [selected, setSelected] = useState(() => readCachedReports()[0] || null)
   const [statusFilter, setStatusFilter] = useState('Semua status')
   const [categoryFilter, setCategoryFilter] = useState('Semua kategori')
   const [severityFilter, setSeverityFilter] = useState('Semua tingkat')
@@ -185,6 +236,13 @@ function App() {
     }
   }, [notice])
 
+  // Simpan daftar laporan ke localStorage setiap kali berubah agar tetap bertahan saat halaman di-refresh
+  useEffect(() => {
+    if (reports.length > 0) {
+      saveCachedReports(reports)
+    }
+  }, [reports])
+
   // Muat data laporan untuk peta sebaran publik (FR-05) maupun dashboard Admin (FR-07)
   useEffect(() => {
     if (!supabase) return
@@ -200,16 +258,22 @@ function App() {
             analysis: Array.isArray(r.ai_analysis) ? r.ai_analysis[0] : r.ai_analysis,
             chat_messages: Array.isArray(r.chat_messages) ? r.chat_messages : []
           }))
-          setReports(rows)
-          setSelected(prev => prev || rows[0])
+          setReports(prev => {
+            const merged = mergeReportLists(rows, prev)
+            setSelected(sel => sel || merged[0] || null)
+            return merged
+          })
           return
         }
       }
       // Fallback RPC publik agar Pelapor tetap bisa melihat marker peta sebaran (FR-05)
       const { data: pubData } = await supabase.rpc('get_public_reports')
       if (Array.isArray(pubData) && pubData.length) {
-        setReports(pubData)
-        setSelected(prev => prev || pubData[0])
+        setReports(prev => {
+          const merged = mergeReportLists(pubData, prev)
+          setSelected(sel => sel || merged[0] || null)
+          return merged
+        })
       }
     }
     loadReports()
@@ -277,30 +341,44 @@ function App() {
       setReportLookup(nextReport)
     }
 
-    if (supabase && session) {
-      if (changes.status) {
-        const { error: statusErr } = await supabase
-          .from('reports')
-          .update({ status: changes.status, updated_by: adminId })
-          .eq('id', selected.id)
-        if (statusErr) {
-          // Fallback jika kolom updated_by belum ditambahkan di DB lama
-          await supabase.from('reports').update({ status: changes.status }).eq('id', selected.id)
+    if (supabase) {
+      let updatedViaRpc = false
+      try {
+        const { error: rpcErr } = await supabase.rpc('admin_update_report', {
+          p_report_id: selected.id,
+          p_status: changes.status || null,
+          p_corrected_category: changes.analysis?.corrected_category || null,
+          p_corrected_severity: changes.analysis?.corrected_severity || null,
+          p_admin_notes: changes.analysis?.admin_notes ?? null,
+          p_admin_id: adminId
+        })
+        if (!rpcErr) updatedViaRpc = true
+      } catch {}
+
+      if (!updatedViaRpc && session) {
+        if (changes.status) {
+          const { error: statusErr } = await supabase
+            .from('reports')
+            .update({ status: changes.status, updated_by: adminId })
+            .eq('id', selected.id)
+          if (statusErr) {
+            await supabase.from('reports').update({ status: changes.status }).eq('id', selected.id)
+          }
         }
-      }
-      if (changes.analysis) {
-        const updatePayload = {
-          is_validated: true,
-          corrected_by: adminId,
-          corrected_at: new Date().toISOString(),
-          ...(changes.analysis.corrected_category ? { corrected_category: changes.analysis.corrected_category } : {}),
-          ...(changes.analysis.corrected_severity ? { corrected_severity: changes.analysis.corrected_severity } : {}),
-          ...(changes.analysis.admin_notes !== undefined ? { admin_notes: changes.analysis.admin_notes } : {})
+        if (changes.analysis) {
+          const updatePayload = {
+            is_validated: true,
+            corrected_by: adminId,
+            corrected_at: new Date().toISOString(),
+            ...(changes.analysis.corrected_category ? { corrected_category: changes.analysis.corrected_category } : {}),
+            ...(changes.analysis.corrected_severity ? { corrected_severity: changes.analysis.corrected_severity } : {}),
+            ...(changes.analysis.admin_notes !== undefined ? { admin_notes: changes.analysis.admin_notes } : {})
+          }
+          await supabase
+            .from('ai_analysis')
+            .update(updatePayload)
+            .eq('report_id', selected.id)
         }
-        await supabase
-          .from('ai_analysis')
-          .update(updatePayload)
-          .eq('report_id', selected.id)
       }
     }
     setNotice(
