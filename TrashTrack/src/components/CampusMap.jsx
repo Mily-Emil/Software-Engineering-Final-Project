@@ -1,21 +1,19 @@
 // Komponen Peta Resmi Google Maps JavaScript API (@vis.gl/react-google-maps)
 // Menampilkan peta Kampus Universitas Klabat (Unklab) dengan poligon batas kampus (UNKLAB_POLYGON)
-// serta AdvancedMarker untuk titik laporan sampah dan pemilih lokasi.
-// Komponen Peta Resmi Google Maps JavaScript API (@vis.gl/react-google-maps)
-// Menampilkan peta Kampus Universitas Klabat (Unklab) dengan poligon batas kampus (UNKLAB_POLYGON)
-// serta Marker untuk titik laporan sampah dan pemilih lokasi.
+// serta Marker resmi Google Maps untuk titik laporan sampah dan pemilih lokasi.
 import React, { useEffect, useState } from 'react'
-import { APIProvider, AdvancedMarker, Marker, Map, useMap, useMapsLibrary } from '@vis.gl/react-google-maps'
+import { APIProvider, Marker, Map, useMap, useMapsLibrary } from '@vis.gl/react-google-maps'
 import { MAP_VIEW_BOUNDS, UNKLAB_CENTER, UNKLAB_POLYGON } from '../lib/ai'
 
 export const GOOGLE_MAPS_API_KEY = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '').trim()
-export const GOOGLE_MAPS_MAP_ID = (import.meta.env.VITE_GOOGLE_MAPS_MAP_ID || '').trim()
 
-export function statusPinClass(status) {
-  if (status === 'Menunggu') return 'waiting'
-  if (status === 'Diproses') return 'progress'
-  if (status === 'Ditolak') return 'rejected'
-  return 'done'
+// Ikon Pin Resmi Google Maps sesuai status laporan TrashTrack Unklab
+const GOOGLE_PIN_ICONS = {
+  Menunggu: 'https://maps.google.com/mapfiles/ms/icons/orange-dot.png',
+  Diproses: 'https://maps.google.com/mapfiles/ms/icons/yellow-dot.png',
+  Ditolak: 'https://maps.google.com/mapfiles/ms/icons/red-dot.png',
+  Selesai: 'https://maps.google.com/mapfiles/ms/icons/green-dot.png',
+  picked: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png'
 }
 
 // Komponen Poligon Batas Kampus Universitas Klabat (7 titik perimeter kampus) pada Google Maps
@@ -50,14 +48,10 @@ function CampusBoundaryPolygon({ isHybrid, fillOpacity = 0.06 }) {
   return null
 }
 
-// Penanda Laporan Sampah pada Google Maps
+// Penanda Titik Sampah pada Google Maps menggunakan Marker Resmi (stabil & kompatibel 100%)
 function CampusMapMarkers({ reports = [], onMarkerClick, pickPosition }) {
   const map = useMap()
   if (!map) return null
-
-  // Jika Map ID tersedia, gunakan AdvancedMarker dengan custom pin HTML.
-  // Jika tanpa Map ID, gunakan Marker standar Google Maps agar tidak error.
-  const hasMapId = Boolean(GOOGLE_MAPS_MAP_ID && GOOGLE_MAPS_MAP_ID !== 'DEMO_MAP_ID')
 
   return (
     <>
@@ -67,21 +61,7 @@ function CampusMapMarkers({ reports = [], onMarkerClick, pickPosition }) {
           const lat = Number(r.latitude)
           const lng = Number(r.longitude)
           const title = `${r.report_code} (${r.status})`
-
-          if (hasMapId) {
-            return (
-              <AdvancedMarker
-                key={r.id || r.report_code}
-                position={{ lat, lng }}
-                onClick={() => onMarkerClick && onMarkerClick(r)}
-                title={title}
-              >
-                <div className={`pin pin-${statusPinClass(r.status)}`}>
-                  <span />
-                </div>
-              </AdvancedMarker>
-            )
-          }
+          const iconUrl = GOOGLE_PIN_ICONS[r.status] || GOOGLE_PIN_ICONS.Menunggu
 
           return (
             <Marker
@@ -89,6 +69,7 @@ function CampusMapMarkers({ reports = [], onMarkerClick, pickPosition }) {
               position={{ lat, lng }}
               onClick={() => onMarkerClick && onMarkerClick(r)}
               title={title}
+              icon={iconUrl}
             />
           )
         })}
@@ -96,24 +77,55 @@ function CampusMapMarkers({ reports = [], onMarkerClick, pickPosition }) {
       {pickPosition &&
         Number.isFinite(Number(pickPosition.latitude)) &&
         Number.isFinite(Number(pickPosition.longitude)) && (
-          hasMapId ? (
-            <AdvancedMarker
-              position={{ lat: Number(pickPosition.latitude), lng: Number(pickPosition.longitude) }}
-              title="Titik lokasi laporan yang dipilih"
-            >
-              <div className="pin pin-picked">
-                <span />
-              </div>
-            </AdvancedMarker>
-          ) : (
-            <Marker
-              position={{ lat: Number(pickPosition.latitude), lng: Number(pickPosition.longitude) }}
-              title="Titik lokasi laporan yang dipilih"
-            />
-          )
+          <Marker
+            position={{ lat: Number(pickPosition.latitude), lng: Number(pickPosition.longitude) }}
+            title="Titik lokasi laporan yang dipilih"
+            icon={GOOGLE_PIN_ICONS.picked}
+          />
         )}
     </>
   )
+}
+
+// MapErrorBoundary: Mengisolasi area peta agar error apapun dari Google Maps tidak menyebabkan blank/white screen pada aplikasi
+class MapErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false }
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  componentDidCatch(err) {
+    console.warn('Google Maps error caught by MapErrorBoundary:', err)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div
+          className={`gmap-wrap ${this.props.className || ''}`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: '#f8fafc',
+            border: '1px solid #e2e8f0',
+            borderRadius: '12px',
+            padding: '24px',
+            textAlign: 'center',
+            color: '#64748b',
+            fontSize: '13px'
+          }}
+        >
+          Memuat komponen peta Google Maps Kampus Unklab...
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }
 
 export function GoogleMapsProvider({ children }) {
@@ -127,8 +139,7 @@ export function GoogleMapsProvider({ children }) {
   )
 }
 
-// Komponen Utama Peta Google Maps Kampus Universitas Klabat
-export default function CampusGoogleMap({
+function CampusGoogleMapInner({
   className = '',
   reports = [],
   onMarkerClick,
@@ -148,38 +159,6 @@ export default function CampusGoogleMap({
     if (latLng && typeof latLng.lat === 'number' && typeof latLng.lng === 'number') {
       onPick({ latitude: latLng.lat, longitude: latLng.lng })
     }
-  }
-
-  // Parameter mapId hanya dioper jika bernilai sah agar Google Maps tidak crash
-  const mapProps = {
-    defaultCenter: { lat: UNKLAB_CENTER[0], lng: UNKLAB_CENTER[1] },
-    defaultZoom: 16,
-    minZoom: 14,
-    maxZoom: 20,
-    mapTypeId,
-    gestureHandling: interactive ? 'greedy' : 'cooperative',
-    disableDefaultUI: !interactive,
-    mapTypeControl: false,
-    streetViewControl: false,
-    fullscreenControl: interactive,
-    zoomControl: interactive,
-    clickableIcons: false,
-    restriction: {
-      latLngBounds: {
-        south: MAP_VIEW_BOUNDS[0][0],
-        west: MAP_VIEW_BOUNDS[0][1],
-        north: MAP_VIEW_BOUNDS[1][0],
-        east: MAP_VIEW_BOUNDS[1][1]
-      },
-      strictBounds: false
-    },
-    onClick: handleMapClick,
-    className: 'gmap-leaflet-inner',
-    style: { width: '100%', height: '100%' }
-  }
-
-  if (GOOGLE_MAPS_MAP_ID && GOOGLE_MAPS_MAP_ID !== 'DEMO_MAP_ID') {
-    mapProps.mapId = GOOGLE_MAPS_MAP_ID
   }
 
   return (
@@ -209,7 +188,32 @@ export default function CampusGoogleMap({
         </div>
       )}
 
-      <Map {...mapProps}>
+      <Map
+        defaultCenter={{ lat: UNKLAB_CENTER[0], lng: UNKLAB_CENTER[1] }}
+        defaultZoom={16}
+        minZoom={14}
+        maxZoom={20}
+        mapTypeId={mapTypeId}
+        gestureHandling={interactive ? 'greedy' : 'cooperative'}
+        disableDefaultUI={!interactive}
+        mapTypeControl={false}
+        streetViewControl={false}
+        fullscreenControl={interactive}
+        zoomControl={interactive}
+        clickableIcons={false}
+        restriction={{
+          latLngBounds: {
+            south: MAP_VIEW_BOUNDS[0][0],
+            west: MAP_VIEW_BOUNDS[0][1],
+            north: MAP_VIEW_BOUNDS[1][0],
+            east: MAP_VIEW_BOUNDS[1][1]
+          },
+          strictBounds: false
+        }}
+        onClick={handleMapClick}
+        className="gmap-leaflet-inner"
+        style={{ width: '100%', height: '100%' }}
+      >
         <CampusBoundaryPolygon isHybrid={layerType === 'y'} fillOpacity={fillOpacity} />
         <CampusMapMarkers reports={reports} onMarkerClick={onMarkerClick} pickPosition={pickPosition} />
       </Map>
@@ -225,5 +229,14 @@ export default function CampusGoogleMap({
         Google Maps API
       </a>
     </div>
+  )
+}
+
+// Komponen Ekspor Utama: Dilindungi oleh MapErrorBoundary agar kegagalan script Google Maps tidak merembet ke seluruh aplikasi
+export default function CampusGoogleMap(props) {
+  return (
+    <MapErrorBoundary className={props.className}>
+      <CampusGoogleMapInner {...props} />
+    </MapErrorBoundary>
   )
 }
