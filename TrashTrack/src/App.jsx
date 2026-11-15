@@ -52,26 +52,65 @@ import {
 
 const statuses = ['Menunggu', 'Diproses', 'Selesai', 'Ditolak']
 
-const dateLabel = date =>
-  date
-    ? new Intl.DateTimeFormat('id-ID', {
-        day: 'numeric',
-        month: 'short',
-        hour: '2-digit',
-        minute: '2-digit'
-      }).format(new Date(date))
-    : 'Baru saja'
+const dateLabel = date => {
+  if (!date) return 'Baru saja'
+  try {
+    const d = new Date(date)
+    if (Number.isNaN(d.getTime())) return 'Baru saja'
+    return new Intl.DateTimeFormat('id-ID', {
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(d)
+  } catch {
+    return 'Baru saja'
+  }
+}
 
 const ADMIN_SESSION_TTL_MS = 2 * 60 * 60 * 1000 // Masa berlaku sesi Admin: 2 jam (Tema 10)
 const LOCKOUT_STORAGE_KEY = 'unklab_admin_lockout'
 const REPORTS_CACHE_KEY = 'unklab_reports_cache_v1'
+
+function normalizeReportItem(r) {
+  if (!r || typeof r !== 'object' || !r.report_code) return null
+  const lat = Number(r.latitude)
+  const lng = Number(r.longitude)
+  const rawAnalysis = r.analysis && typeof r.analysis === 'object' ? r.analysis : {}
+  return {
+    ...r,
+    id: r.id || r.report_code,
+    report_code: String(r.report_code).trim().toUpperCase(),
+    latitude: Number.isFinite(lat) ? lat : DEFAULT_LOCATION.latitude,
+    longitude: Number.isFinite(lng) ? lng : DEFAULT_LOCATION.longitude,
+    status: statuses.includes(r.status) ? r.status : 'Menunggu',
+    analysis: {
+      is_waste: rawAnalysis.is_waste ?? r.is_waste ?? r.status !== 'Ditolak',
+      category: rawAnalysis.category || r.category || 'anorganik',
+      severity: rawAnalysis.severity || r.severity || 'sedang',
+      confidence_score: Number.isFinite(Number(rawAnalysis.confidence_score ?? r.confidence_score))
+        ? Number(rawAnalysis.confidence_score ?? r.confidence_score)
+        : 0.9,
+      detected_notes: rawAnalysis.detected_notes ?? r.detected_notes ?? '',
+      ai_model: rawAnalysis.ai_model || r.ai_model || 'gemini-3.5-flash-lite',
+      is_validated: Boolean(rawAnalysis.is_validated ?? r.is_validated),
+      corrected_category: rawAnalysis.corrected_category ?? r.corrected_category ?? null,
+      corrected_severity: rawAnalysis.corrected_severity ?? r.corrected_severity ?? null,
+      admin_notes: rawAnalysis.admin_notes ?? r.admin_notes ?? null
+    },
+    chat_messages: Array.isArray(r.chat_messages)
+      ? r.chat_messages.filter(m => m && typeof m.message === 'string')
+      : []
+  }
+}
 
 function readCachedReports() {
   try {
     const raw = localStorage.getItem(REPORTS_CACHE_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.map(normalizeReportItem).filter(Boolean)
   } catch {
     return []
   }
@@ -102,10 +141,12 @@ function saveCachedReports(list) {
 
 function mergeReportLists(remoteList = [], localList = []) {
   const byCode = new Map()
-  for (const item of localList) {
+  for (const rawItem of localList) {
+    const item = normalizeReportItem(rawItem)
     if (item?.report_code) byCode.set(item.report_code, item)
   }
-  for (const item of remoteList) {
+  for (const rawItem of remoteList) {
+    const item = normalizeReportItem(rawItem)
     if (!item?.report_code) continue
     const existing = byCode.get(item.report_code)
     byCode.set(item.report_code, {
@@ -119,7 +160,7 @@ function mergeReportLists(remoteList = [], localList = []) {
     })
   }
   return Array.from(byCode.values()).sort(
-    (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+    (a, b) => (new Date(b.created_at || 0).getTime() || 0) - (new Date(a.created_at || 0).getTime() || 0)
   )
 }
 
@@ -1918,8 +1959,8 @@ function App() {
                 </div>
                 <h3>{selected.description || 'Laporan titik sampah di lingkungan Universitas Klabat'}</h3>
                 <p>
-                  <MapPin size={14} /> {selected.zone_name || unklabZoneName(selected)} ({selected.latitude.toFixed(5)},{' '}
-                  {selected.longitude.toFixed(5)})
+                  <MapPin size={14} /> {selected.zone_name || unklabZoneName(selected)} ({Number(selected.latitude ?? DEFAULT_LOCATION.latitude).toFixed(5)},{' '}
+                  {Number(selected.longitude ?? DEFAULT_LOCATION.longitude).toFixed(5)})
                 </p>
                 <div className="location-meta-chip">
                   <span>Sumber: <strong>{selected.location_source === 'gps' ? 'GPS Perangkat' : 'Pilihan Peta Kampus'}</strong></span>

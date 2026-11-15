@@ -126,20 +126,22 @@ export default function CampusGoogleMap({
       >
         <CampusBoundaryPolygon isHybrid={layerType === 'y'} fillOpacity={fillOpacity} />
 
-        {reports.map(r => (
-          <AdvancedMarker
-            key={r.id || r.report_code}
-            position={{ lat: Number(r.latitude), lng: Number(r.longitude) }}
-            onClick={() => onMarkerClick && onMarkerClick(r)}
-            title={`${r.report_code} (${r.status})`}
-          >
-            <div className={`pin pin-${statusPinClass(r.status)}`}>
-              <span />
-            </div>
-          </AdvancedMarker>
-        ))}
+        {reports
+          .filter(r => r && Number.isFinite(Number(r.latitude)) && Number.isFinite(Number(r.longitude)))
+          .map(r => (
+            <AdvancedMarker
+              key={r.id || r.report_code}
+              position={{ lat: Number(r.latitude), lng: Number(r.longitude) }}
+              onClick={() => onMarkerClick && onMarkerClick(r)}
+              title={`${r.report_code} (${r.status})`}
+            >
+              <div className={`pin pin-${statusPinClass(r.status)}`}>
+                <span />
+              </div>
+            </AdvancedMarker>
+          ))}
 
-        {pickPosition && (
+        {pickPosition && Number.isFinite(Number(pickPosition.latitude)) && Number.isFinite(Number(pickPosition.longitude)) && (
           <AdvancedMarker
             position={{ lat: Number(pickPosition.latitude), lng: Number(pickPosition.longitude) }}
             title="Titik lokasi laporan"
